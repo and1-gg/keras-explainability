@@ -1,0 +1,3 @@
+[formats]
+"ipynb_files/" = "ipynb"
+"py_files/" = "py:percent"
