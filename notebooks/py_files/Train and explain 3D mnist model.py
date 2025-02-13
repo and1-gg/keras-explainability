@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.16.7
 #   kernelspec:
 #     display_name: brainage-explainability-1UiqnLSG-py3.10
 #     language: python
@@ -13,6 +13,19 @@
 # ---
 
 # %%
+import sys
+import os
+
+# Get the current working directory
+notebook_dir = os.getcwd()
+
+# Construct the path to the 'src' directory
+src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
+
+# Add the 'src' directory to the Python path
+if src_dir not in sys.path:
+    sys.path.append(src_dir) 
+
 import h5py
 import os
 import matplotlib.pyplot as plt
@@ -145,20 +158,6 @@ model.fit(train_X, train_y,
           callbacks=callbacks)
 
 # %%
-import sys
-import os
-
-# Get the current working directory
-notebook_dir = os.getcwd()
-
-# Construct the path to the 'src' directory
-#src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
-src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd())))
-
-# Add the 'src' directory to the Python path
-if src_dir not in sys.path:
-    sys.path.append(src_dir) 
-
 from explainability import LRP, LRPStrategy
 
 

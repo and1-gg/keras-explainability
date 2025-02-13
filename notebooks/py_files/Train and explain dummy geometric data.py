@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.16.7
 #   kernelspec:
 #     display_name: brainage-explainability-1UiqnLSG-py3.10
 #     language: python
@@ -13,6 +13,20 @@
 # ---
 
 # %%
+import sys
+import os
+
+# Get the current working directory
+notebook_dir = os.getcwd()
+
+# Construct the path to the 'src' directory
+src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
+
+
+# Add the 'src' directory to the Python path
+if src_dir not in sys.path:
+    sys.path.append(src_dir) 
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -142,9 +156,11 @@ strategy = LRPStrategy(
         {'epsilon': 0.5}
     ]
 )
-
+#layer_idx = 9
+#layer_idx = 32
+layer_idx = 19
 explainers = {
-    encoder.categories_[0][i]: LRP(model, layer=32, idx=i, strategy=strategy) \
+    encoder.categories_[0][i]: LRP(model, layer=layer_idx, idx=i, strategy=strategy) \
     for i in range(3)
 }
 
@@ -258,5 +274,3 @@ for i in range(len(combinations)):
 
 # %%
 print(len(model.layers))
-
-# %%

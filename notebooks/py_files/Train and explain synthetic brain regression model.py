@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.16.7
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -13,13 +13,6 @@
 # ---
 
 # %%
-import matplotlib.pyplot as plt
-import numpy as np
-
-from sklearn.metrics.pairwise import euclidean_distances
-from typing import Any
-
-
 import sys
 import os
 
@@ -27,12 +20,17 @@ import os
 notebook_dir = os.getcwd()
 
 # Construct the path to the 'src' directory
-#src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
-src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd())))
+src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
 
 # Add the 'src' directory to the Python path
 if src_dir not in sys.path:
     sys.path.append(src_dir) 
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from sklearn.metrics.pairwise import euclidean_distances
+from typing import Any
 
 from explainability import LRP, LRPStrategy
 
@@ -42,8 +40,8 @@ np.random.seed(42)
 IMAGE_SIZE = 32
 NUM_TUNNELS = 6
 MAX_RADIUS = 10
-N = 10
-#N = 1000
+#N = 10
+N = 1000
 
 def key(x: Any):
     if isinstance(x, tuple):
@@ -100,6 +98,7 @@ def create_brain(size: int, width: int, num_tunnels: int = 1):
 
 X = []
 y = np.random.randint(1, MAX_RADIUS + 1, N)
+print("y: ", y)
 
 for i in range(len(y)):
     X.append(create_brain(IMAGE_SIZE, width=y[i], num_tunnels=NUM_TUNNELS))
@@ -109,7 +108,10 @@ for i in range(len(y)):
 fig, ax = plt.subplots(10, 8, figsize=(15, 15))
 
 for i in range(1, MAX_RADIUS + 1):
+    print("i: ", i)
     idx = np.where(y == i)[0][0]
+    #idx = np.where(y == i)[0]
+    print("idx: ", idx)
     
     for j in range(8):
         ax[i-1][j].imshow(X[idx][12+j], cmap='Greys_r')
@@ -209,7 +211,8 @@ callbacks = [
 history = model.fit(train_X, train_y, 
                     validation_data=(val_X, val_y), 
                     batch_size=32,
-                    epochs=500,
+                    #epochs=500,
+                    epochs=2,
                     callbacks=callbacks)
 
 
@@ -672,7 +675,8 @@ callbacks = [
 history = model.fit(train_X, train_y, 
                     validation_data=(val_X, val_y), 
                     batch_size=32,
-                    epochs=500,
+                    epochs=2,
+                    #epochs=500,
                     callbacks=callbacks)
 
 
