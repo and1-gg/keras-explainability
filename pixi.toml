@@ -1,0 +1,36 @@
+[project]
+name = "dementia_xai_gpu_py-3.10_tf-2.17.1_cuda-12.3"
+version = "0.1.0"
+description = "GPU environment for xai for dementia prediction"
+# Die Kanäle werden in der Reihenfolge ihrer Priorität gelistet.
+channels = ["conda-forge", "nvidia"]
+platforms = ["linux-64"] # Setze die Plattform auf linux-64, da es sich um eine GPU-Umgebung handelt
+
+[dependencies]
+# Conda-Abhängigkeiten
+python = "3.10.*"
+cudnn = "8.9.*"
+cuda = "12.3.*"
+pip = "*"
+
+[pypi-dependencies]
+# PyPI-Abhängigkeiten:
+# Wir verwenden die korrekte Syntax für Extras ([and-cuda]), 
+# indem wir das Paket als Objekt definieren.
+tensorflow = { version = "==2.17.1", extras = ["and-cuda"] }
+numpy = ">=1.26.4, <2"
+matplotlib = ">=3.10.7, <4"
+scikit-learn = ">=1.7.2, <2"
+plotly = ">=6.4.0, <7"
+
+[tasks]
+install-ipykernel = { cmd = ["pip", "install", "ipykernel"] }
+# register-ipykernel = { cmd = [
+#     "python", 
+#     "-m", "ipykernel", "install",
+#     "--user",
+#     "--name", "$KERNEL_NAME",
+#     "--display-name", "$KERNEL_NAME"
+#   ],  env = { KERNEL_NAME = "dementia_xai_gpu_py-3.10_tf-2.17.1_cuda-12.3" }}
+
+
