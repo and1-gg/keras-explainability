@@ -3,5 +3,8 @@
 # ignore data folder
 data/
 
+
 # ignore notebooks
 *.ipynb
+.ipynb_checkpoints/
+*-checkpoint.py
