@@ -90,6 +90,7 @@ class PoolingLRPLayer(LRPLayer, ABC):
                               padding=padding,
                               name=f'{self.name}/forward')
         s = R / z
+        s = tf.where(z == 0, tf.zeros_like(s), s)
 
         input_shape = (self.batch_size,) + a.shape[1:]
         ksize = [1] + ksize + [1]

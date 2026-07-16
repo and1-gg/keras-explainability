@@ -22,7 +22,7 @@
 #     name: python
 #     nbconvert_exporter: python
 #     pygments_lexer: ipython3
-#     version: 3.10.19
+#     version: 3.10.8
 # ---
 
 # %%
@@ -44,11 +44,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-#data_path = os.path.join(os.path.expanduser('/home/and1/git-repos/keras-explainability'), 'data', '3d-mnist', 'full_dataset_vectors.h5')
-
-#data_path = "/home/and1/git-repos/keras-explainability/data/3d-mnist/full_dataset_vectors.h5"
-
-data_path = os.path.join(os.path.expanduser('/mnt/users/andreasre/git-repos/keras-explainability'), 'data', '3d-mnist', 'full_dataset_vectors.h5')
+data_path = os.path.join(os.path.expanduser('~/git-repos/keras-explainability'), 'data', '3d-mnist', 'full_dataset_vectors.h5')
 
 assert os.path.isfile(data_path), \
     'Download the 3d-mnist data from https://www.kaggle.com/daavoo/3d-mnist'
@@ -163,13 +159,36 @@ callbacks = [
     )
 ]
 
+"""
 model.fit(train_X, train_y, 
           validation_data=(test_X, test_y), 
-          epochs=2, 
-          #epochs=100, 
+          #epochs=2, 
+          epochs=100, 
           batch_size=32, 
           shuffle=True,
           callbacks=callbacks)
+"""
+
+# %%
+from pathlib import Path
+from tensorflow.keras.models import load_model
+
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
+
+MODEL_DIR = find_repo_root() / "trainings_runs" / "3d_mnist" / "100_epochs"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = MODEL_DIR / "3d_mnist_cnn.keras"
+
+#model.save(MODEL_PATH)
+#print(f"Model gespeichert unter: {MODEL_PATH}")
+
+model = load_model(MODEL_PATH)
+print(f"Model geladen von: {MODEL_PATH}")
 
 # %%
 from explainability import LRP, LRPStrategy
@@ -193,14 +212,14 @@ strategy = LRPStrategy(
     ]
 )
 
-image_idx = 0
+image_idx = 6
 
 explanations = np.zeros((10, 16, 16, 16, 1))
 predictions = model.predict(train_X[image_idx:image_idx + 1])
 print(f'Predictions: {predictions[0]}')
 
 for i in range(10):
-    explainer = LRP(model, layer=33, idx=i, strategy=strategy)
+    explainer = LRP(model, layer=len(model.layers)-1, idx=i, strategy=strategy)
     explanations[i] = explainer(train_X[image_idx:image_idx + 1])
     print(f'Sum evidence for {i}: {np.sum(explanations[i])}')
 
@@ -230,6 +249,101 @@ for i in range(10):
         
 plt.show()
 
+# %% [markdown]
+# # 3d mnist plotten
+
 # %%
+import plotly.graph_objects as go
+
+def plot_digit_3d(vol, title="", threshold=0.1):
+    vol = np.asarray(vol[..., 0] if vol.ndim == 4 else vol)
+    z, y, x = np.where(vol > threshold)
+    fig = go.Figure(go.Scatter3d(
+        x=x, y=y, z=z, mode="markers",
+        marker=dict(size=4, opacity=0.85, color=vol[z, y, x], colorscale="Viridis"),
+    ))
+    fig.update_layout(
+        title=title,
+        scene=dict(aspectmode="cube",
+                   xaxis=dict(range=[0, 16]), yaxis=dict(range=[0, 16]), zaxis=dict(range=[0, 16])),
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+    fig.show()
+
+idx = 6
+plot_digit_3d(train_X[idx], title=f"Label: {np.argmax(train_y[idx])}")
+
+# %% [markdown]
+# # Eine 3D-Zahl rein → Prediction
+
+# %%
+idx = 0
+sample = train_X[idx:idx + 1]          # Shape (1, 16, 16, 16, 1)
+probs = model.predict(sample, verbose=0)[0]
+pred = int(np.argmax(probs))
+true = int(np.argmax(train_y[idx]))
+
+print(f"True: {true} | Pred: {pred} | Confidence: {probs[pred]:.4f}")
+print(probs)
+
+# %% [markdown]
+# # Input + LRP-Explanation in 3D
+
+# %%
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from explainability import LRP, LRPStrategy
+
+idx = 6
+sample = train_X[idx:idx + 1]
+true_label = int(np.argmax(train_y[idx]))
+probs = model.predict(sample, verbose=0)[0]
+pred = int(np.argmax(probs))
+
+strategy = LRPStrategy(layers=[
+    {'b': True, 'alpha': 1, 'beta': 0},
+    *[{'alpha': 2, 'beta': 1}] * 7,
+    {'epsilon': 0.25},
+    {'epsilon': 0.25},
+])
+explainer = LRP(model, layer=len(model.layers) - 1, idx=pred, strategy=strategy)
+R = np.array(explainer(sample))[0, ..., 0]
+R = R / (np.max(np.abs(R)) + 1e-12)
+
+vol = sample[0, ..., 0]
+z, y, x = np.where(vol > 0.1)
+
+fig = make_subplots(
+    rows=1, cols=2,
+    specs=[[{"type": "scene"}, {"type": "scene"}]],
+    subplot_titles=(
+        f"Input (true={true_label})",
+        f"LRP for class {pred} (p={probs[pred]:.2f})",
+    ),
+)
+fig.add_trace(go.Scatter3d(
+    x=x, y=y, z=z, mode="markers",
+    marker=dict(size=4, opacity=0.85, color=vol[z, y, x], colorscale="Viridis"),
+    showlegend=False,
+), row=1, col=1)
+fig.add_trace(go.Scatter3d(
+    x=x, y=y, z=z, mode="markers",
+    marker=dict(
+        size=4, opacity=0.9,
+        color=R[z, y, x],
+        colorscale="RdBu_r",
+        cmin=-1, cmax=1,
+        showscale=True,
+        colorbar=dict(title="Relevance", x=1.02),
+    ),
+    showlegend=False,
+), row=1, col=2)
+fig.update_layout(
+    title=f"Sample #{idx}",
+    scene=dict(aspectmode="cube"),
+    scene2=dict(aspectmode="cube"),
+    margin=dict(l=0, r=80, t=60, b=0),
+)
+fig.show()
 
 # %%

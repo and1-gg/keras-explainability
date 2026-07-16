@@ -22,7 +22,7 @@
 #     name: python
 #     nbconvert_exporter: python
 #     pygments_lexer: ipython3
-#     version: 3.10.19
+#     version: 3.10.8
 # ---
 
 # %%
@@ -31,3 +31,5 @@ print("tensor-flow-version: ", tf.__version__)
 print("#######################")
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 print("#######################")
+
+# %%
