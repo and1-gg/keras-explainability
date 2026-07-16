@@ -2,13 +2,13 @@
 # jupyter:
 #   jupytext:
 #     cell_metadata_filter: -all
-#     formats: ipynb,py:percent
+#     formats: notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent
 #     notebook_metadata_filter: all
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: dementia_xai_gpu_py-3.10_tf-2.17.1_cuda-12.3
 #     language: python

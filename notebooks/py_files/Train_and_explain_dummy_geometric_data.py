@@ -2,17 +2,17 @@
 # jupyter:
 #   jupytext:
 #     cell_metadata_filter: -all
-#     formats: ipynb,py:percent
+#     formats: notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent
 #     notebook_metadata_filter: all
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: test-gpu-pixi_py-3.10_tf-2.15.1_cuda-12.2
+#     display_name: py-uv_keras_xai (uv)
 #     language: python
-#     name: test-gpu-pixi_py-3.10_tf-2.15.1_cuda-12.2
+#     name: py-uv_keras_xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -22,7 +22,7 @@
 #     name: python
 #     nbconvert_exporter: python
 #     pygments_lexer: ipython3
-#     version: 3.10.19
+#     version: 3.10.8
 # ---
 
 # %%
@@ -292,5 +292,8 @@ for i in range(len(combinations)):
 
 # %%
 print(len(model.layers))
+
+# %%
+1+1
 
 # %%

@@ -1,4 +1,0 @@
-formats = "ipynb_files//ipynb,py_files//py:percent"
-notebook_metadata_filter = "all"
-cell_metadata_filter = "-all"
-

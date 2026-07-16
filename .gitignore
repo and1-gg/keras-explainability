@@ -1,5 +1,8 @@
 **/__pycache__/**/*
 
+# uv / local virtualenv
+.venv/
+
 # ignore data folder
 data/
 
