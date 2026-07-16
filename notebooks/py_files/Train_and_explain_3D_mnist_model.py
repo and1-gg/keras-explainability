@@ -10,9 +10,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: dementia_xai_gpu_py-3.10_tf-2.17.1_cuda-12.3
+#     display_name: py-uv_keras_xai (uv)
 #     language: python
-#     name: dementia_xai_gpu_py-3.10_tf-2.17.1_cuda-12.3
+#     name: py-uv_keras_xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython

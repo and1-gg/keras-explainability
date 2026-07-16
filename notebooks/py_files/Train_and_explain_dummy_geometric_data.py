@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: py-uv_keras_xai (uv)
 #     language: python
