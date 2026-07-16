@@ -128,7 +128,7 @@ def find_repo_root() -> Path:
             return candidate
     return p
 
-MODEL_DIR = find_repo_root() / "trainings_runs" / "100_epochs"
+MODEL_DIR = find_repo_root() / "trainings_runs" / "geometric_dummy_data" / "100_epochs"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODEL_DIR / "geometric_3d_cnn.keras"
 
