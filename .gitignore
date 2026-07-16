@@ -6,6 +6,10 @@
 # ignore data folder
 data/
 
+# trained model checkpoints / runs (large binaries)
+trainings_runs/
+
+
 
 # ignore notebooks
 *.ipynb

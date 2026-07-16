@@ -6,8 +6,12 @@ HTML_DIR  := notebooks/html_files
 
 .PHONY: help setup kernel test-gpu test-gpu-tensorflow test-gpu-pytorch test-gpu-xgboost \
         notebooks-from-py py-from-notebooks sync-py-and-ipynb \
-        run-notebooks html-from-notebooks html-from-notebook-with-quarto \
-        clean-notebooks
+        run-notebooks html-from-notebooks html-from-single-notebook \
+        html-from-notebook-with-quarto clean-notebooks
+
+# Erlaubt: make html-from-single-notebook Foo.ipynb  (ohne "No rule to make target")
+%.ipynb:
+	@:
 
 help: ## Zeigt alle verfügbaren Targets mit Beschreibung
 	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | \
@@ -66,6 +70,27 @@ html-from-notebooks: run-notebooks ## Notebooks ausführen + als HTML exportiere
 		[ -e "$$f" ] || continue; \
 		uv run jupyter nbconvert --to html "$$f" --output-dir "$(HTML_DIR)"; \
 	done
+
+html-from-single-notebook: ## Einzelnes Notebook ausführen + HTML (z.B. make html-from-single-notebook Foo.ipynb)
+	@nb="$(or $(NB),$(firstword $(filter %.ipynb,$(MAKECMDGOALS))))"; \
+	if [ -z "$$nb" ]; then \
+		echo "Usage: make html-from-single-notebook <name>.ipynb"; \
+		echo "   or: make html-from-single-notebook NB=<name>.ipynb"; \
+		exit 1; \
+	fi; \
+	case "$$nb" in \
+		*/*) ;; \
+		*) nb="$(NB_DIR)/$$nb" ;; \
+	esac; \
+	if [ ! -f "$$nb" ]; then \
+		echo "Notebook nicht gefunden: $$nb"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(HTML_DIR)"; \
+	echo "Execute: $$nb"; \
+	uv run jupyter nbconvert --to notebook --execute --inplace "$$nb"; \
+	echo "HTML -> $(HTML_DIR)/"; \
+	uv run jupyter nbconvert --to html "$$nb" --output-dir "$(HTML_DIR)"
 
 html-from-notebook-with-quarto: ## Notebooks via Quarto ausführen + als HTML exportieren
 	@mkdir -p "$(HTML_DIR)"

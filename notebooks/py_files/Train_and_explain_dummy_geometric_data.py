@@ -112,11 +112,25 @@ test_X = X[:300]
 test_y = y[:300]
 
 # %%
+from pathlib import Path
+
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Activation, BatchNormalization, Conv3D, Dense, Dropout, \
                                     Flatten, GlobalAveragePooling3D, Input, MaxPooling3D, Reshape
+from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
+
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
+
+MODEL_DIR = find_repo_root() / "trainings_runs" / "100_epochs"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = MODEL_DIR / "geometric_3d_cnn.keras"
 
 input = Input((shape, shape, shape, 1))
 x = input
@@ -149,9 +163,17 @@ model = Model(input, x)
 
 model.compile(loss='categorical_crossentropy', optimizer=Adam(1e-4), metrics=['accuracy'])
 
-model.fit(train_X, train_y, validation_data=(test_X, test_y), batch_size=32, 
-          epochs=10)
-          #epochs=100)
+#model.fit(train_X, train_y, validation_data=(test_X, test_y), batch_size=32,
+#          epochs=100)
+
+#model.save(MODEL_PATH)
+print(f"Model gespeichert unter: {MODEL_PATH}")
+
+model = load_model(MODEL_PATH)
+print(f"Model geladen von: {MODEL_PATH}")
+
+# %%
+print(len(model.layers))
 
 # %%
 from explainability import LRP, LRPStrategy
@@ -169,18 +191,21 @@ strategy = LRPStrategy(
         {'epsilon': 0.5}
     ]
 )
-#layer_idx = 9
-#layer_idx = 32
-layer_idx = 19
+#N_layers = 9
+#N_layers = 32
+N_layers = len(model.layers)-1
 
 for layer in model.layers:
     if "dropout" in layer.name.lower():
         layer.rate = 0.0
 
 explainers = {
-    encoder.categories_[0][i]: LRP(model, layer=layer_idx, idx=i, strategy=strategy) \
+    encoder.categories_[0][i]: LRP(model, layer=N_layers, idx=i, strategy=strategy) \
     for i in range(3)
 }
+
+# %%
+encoder.categories_[0]
 
 # %%
 for i in range(10):
@@ -290,10 +315,108 @@ for i in range(len(combinations)):
     plt.show()
 
 
-# %%
-print(len(model.layers))
+# %% [markdown]
+# # 3d plot
 
 # %%
-1+1
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
 
-# %%
+
+def plot_volume_plotly(vol: np.ndarray, title: str = "", threshold: float = 0.5):
+    vol = np.asarray(vol)
+    if vol.ndim == 4:
+        vol = vol[..., 0]
+    z, y, x = np.where(vol > threshold)
+    fig = go.Figure(data=[go.Scatter3d(
+        x=x, y=y, z=z,
+        mode="markers",
+        marker=dict(size=4, opacity=0.8, color=vol[z, y, x], colorscale="Viridis"),
+    )])
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title="x", yaxis_title="y", zaxis_title="z",
+            aspectmode="cube",
+            xaxis=dict(range=[0, vol.shape[2]]),
+            yaxis=dict(range=[0, vol.shape[1]]),
+            zaxis=dict(range=[0, vol.shape[0]]),
+        ),
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+    fig.show()
+
+
+def plot_random_volumes_plotly(
+    X: np.ndarray,
+    y: np.ndarray,
+    n: int = 10,
+    threshold: float = 0.5,
+    seed: int = 42,
+    class_names=None,
+):
+    """10 (oder n) zufällige 3D-Volumen als interaktive Plotly-Subplots."""
+    rng = np.random.default_rng(seed)
+    idxs = rng.choice(len(X), size=min(n, len(X)), replace=False)
+
+    titles = []
+    for i in idxs:
+        if y.ndim == 2:
+            cls = class_names[np.argmax(y[i])] if class_names is not None else int(np.argmax(y[i]))
+        else:
+            cls = y[i]
+        titles.append(f"#{i}: {cls}")
+
+    n_plots = len(idxs)
+    n_cols = 5
+    n_rows = int(np.ceil(n_plots / n_cols))
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        specs=[[{"type": "scene"} for _ in range(n_cols)] for _ in range(n_rows)],
+        subplot_titles=titles,
+    )
+
+    for k, i in enumerate(idxs):
+        row, col = divmod(k, n_cols)
+        vol = np.asarray(X[i])
+        if vol.ndim == 4:
+            vol = vol[..., 0]
+        z, yy, x = np.where(vol > threshold)
+        fig.add_trace(
+            go.Scatter3d(
+                x=x, y=yy, z=z,
+                mode="markers",
+                marker=dict(size=3, opacity=0.85, color=vol[z, yy, x], colorscale="Viridis"),
+                showlegend=False,
+                name=titles[k],
+            ),
+            row=row + 1,
+            col=col + 1,
+        )
+
+    # X: (N, D, H, W, 1)
+    d, h, w = X.shape[1], X.shape[2], X.shape[3]
+    scene_layout = dict(
+        aspectmode="cube",
+        xaxis=dict(range=[0, w], title="x"),
+        yaxis=dict(range=[0, h], title="y"),
+        zaxis=dict(range=[0, d], title="z"),
+    )
+
+    layout_scenes = {f"scene{k+1}" if k else "scene": scene_layout for k in range(n_plots)}
+    fig.update_layout(
+        title=f"{n_plots} zufällige 3D-Samples",
+        height=400 * n_rows,
+        width=1200,
+        margin=dict(l=0, r=0, t=60, b=0),
+        **layout_scenes,
+    )
+    #fig.show()
+    fig.show(renderer="notebook")
+
+# 10 zufällig ausgewählte Samples aus X
+plot_random_volumes_plotly(
+    X, y, n=10, seed=42, class_names=encoder.categories_[0]
+)
