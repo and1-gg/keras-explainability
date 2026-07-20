@@ -212,7 +212,7 @@ strategy = LRPStrategy(
     ]
 )
 
-image_idx = 6
+image_idx = 654
 
 explanations = np.zeros((10, 16, 16, 16, 1))
 predictions = model.predict(train_X[image_idx:image_idx + 1])
@@ -224,20 +224,52 @@ for i in range(10):
     print(f'Sum evidence for {i}: {np.sum(explanations[i])}')
 
 # %%
-for i in range(len(explanations)):
+import matplotlib.pyplot as plt
+import numpy as np
+
+num_explanations = len(explanations)
+
+# 1. Erstelle EINE große Figur vor der Schleife
+# Zeilen = 2 * Anzahl der Erklärungen, Spalten = 16
+fig, ax = plt.subplots(2 * num_explanations, 16, figsize=(30, 5 * num_explanations))
+
+for i in range(num_explanations):
     explanations[i] = explanations[i] / np.amax(np.abs(explanations[i]))
-    explanations[i] -= explanations[i,0,0,0,0]
+    explanations[i] -= explanations[i, 0, 0, 0, 0]
     
-    fig, ax = plt.subplots(2, 16, figsize=(30, 5))
-    fig.suptitle(f'{i} ({round(predictions[0,i], 2)})')
+    # Berechne die korrekten Zeilen-Indizes für diese Erklärung
+    row_orig = 2 * i
+    row_expl = 2 * i + 1
+    
+    # Optional: Ein Titel pro Block links am Rand (da suptitle sonst alles überschreibt)
+    ax[row_orig][0].set_ylabel(f'ID {i} ({round(predictions[0,i], 2)})', 
+                               fontsize=16, rotation=0, labelpad=40, va='center')
     
     for j in range(16):
-        ax[0][j].imshow(train_X[image_idx,:,:,j])
-        ax[1][j].imshow(explanations[i,:,:,j], cmap='seismic', clim=(-1, 1))
-        ax[0][j].axis('off')
-        ax[1][j].axis('off')
+        # Originalbilder in die obere Zeile des Blocks
+        ax[row_orig][j].imshow(train_X[image_idx, :, :, j])
+        ax[row_orig][j].set_xticks([])
+        ax[row_orig][j].set_yticks([])
         
-    plt.show()
+        # Erklärungen in die untere Zeile des Blocks
+        ax[row_expl][j].imshow(explanations[i, :, :, j], cmap='seismic', clim=(-1, 1))
+        ax[row_expl][j].set_xticks([])
+        ax[row_expl][j].set_yticks([])
+        
+        # Rahmen ausschalten (außer für das erste Bild wegen des Labels links)
+        if j > 0:
+            ax[row_orig][j].axis('off')
+        ax[row_expl][j].axis('off')
+
+# 2. Layout optimieren, damit sich die Zeilen nicht überschneiden
+plt.tight_layout()
+
+# 3. Als eine einzige, große Datei speichern
+fig.savefig(MODEL_DIR / "all_slices_combined.png", bbox_inches='tight', dpi=150)
+
+# 4. Am Ende einmal anzeigen und Speicher freigeben
+plt.show()
+plt.close(fig)
 
 # %%
 fig, ax = plt.subplots(10, 10, figsize=(20, 20))
@@ -270,14 +302,14 @@ def plot_digit_3d(vol, title="", threshold=0.1):
     )
     fig.show()
 
-idx = 6
+idx = image_idx
 plot_digit_3d(train_X[idx], title=f"Label: {np.argmax(train_y[idx])}")
 
 # %% [markdown]
 # # Eine 3D-Zahl rein → Prediction
 
 # %%
-idx = 0
+idx = image_idx
 sample = train_X[idx:idx + 1]          # Shape (1, 16, 16, 16, 1)
 probs = model.predict(sample, verbose=0)[0]
 pred = int(np.argmax(probs))
@@ -294,7 +326,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from explainability import LRP, LRPStrategy
 
-idx = 6
+idx = image_idx
 sample = train_X[idx:idx + 1]
 true_label = int(np.argmax(train_y[idx]))
 probs = model.predict(sample, verbose=0)[0]
@@ -345,5 +377,31 @@ fig.update_layout(
     margin=dict(l=0, r=80, t=60, b=0),
 )
 fig.show()
+
+# %%
+data_path = os.path.join(os.path.expanduser('~/git-repos/keras-explainability'), 'data', '3d-mnist', 'full_dataset_vectors.h5')
+
+assert os.path.isfile(data_path), \
+    'Download the 3d-mnist data from https://www.kaggle.com/daavoo/3d-mnist'
+
+with h5py.File(data_path, 'r') as f:
+    dtrain_x = (f["X_train"][:], (-1, 16, 16, 16, 1))
+    dtrain_y = f["y_train"][:]    
+    draw_x = f["X_train"][:]
+    #dtrain_x = f["X_train"][:]  
+    dtest_X = np.reshape(f["X_test"][:]  , (-1, 16, 16, 16, 1))
+    dtest_y = f["y_test"][:]
+
+# %%
+dtrain_x
+
+# %%
+dtrain_y.shape
+
+# %%
+draw_x.shape
+
+# %%
+16**3
 
 # %%
