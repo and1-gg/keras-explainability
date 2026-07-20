@@ -22,13 +22,26 @@
 #     name: python
 #     nbconvert_exporter: python
 #     pygments_lexer: ipython3
-#     version: 3.10.19
+#     version: 3.10.8
 # ---
 
 # %%
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+
+import sys
+
+# Get the current working directory
+notebook_dir = os.getcwd()
+
+# Construct the path to the 'src' directory
+src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
+
+
+# Add the 'src' directory to the Python path
+if src_dir not in sys.path:
+    sys.path.append(src_dir) 
 
 from tensorflow.keras.applications import VGG19
 from tensorflow.keras.applications.vgg19 import preprocess_input, decode_predictions
