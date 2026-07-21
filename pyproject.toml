@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "GPU environment for keras explainability (uv)"
 requires-python = ">=3.10,<3.11"
 dependencies = [
+    "gitpython>=3.1.53",
+    "ipynbname>=2025.8.0.0",
     "jupyterlab>=4.6.1",
+    "kaleido>=1.3.0",
     "matplotlib>=3.10.9",
     # 'and-cuda' Extra zieht automatisch die passenden CUDA/cuDNN-Wheels mit
     # (nur relevant/funktional unter Linux; auf macOS/Windows ohne GPU-Support)
