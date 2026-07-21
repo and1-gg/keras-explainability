@@ -15,3 +15,5 @@ trainings_runs/
 *.ipynb
 .ipynb_checkpoints/
 *-checkpoint.py
+notebooks/html_files/
+output/notebooks/
