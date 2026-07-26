@@ -1,5 +1,5 @@
 [project]
-name = "py-uv_keras_xai"
+name = "py-uv_keras-xai"
 version = "0.1.0"
 description = "GPU environment for keras explainability (uv)"
 requires-python = ">=3.10,<3.11"
@@ -15,7 +15,8 @@ dependencies = [
     "plotly>=6.9.0",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.7.2",
-    "tensorflow[and-cuda]>=2.16,<2.18",
+    "tensorflow-datasets>=4.9.10",
+    "tensorflow[and-cuda]>=2.18,<3",
     # PyPI-Wheels enthalten unter Linux/Windows GPU-Support (CUDA 13, getrennt von TF-CUDA-12)
     "torch>=2.5",
     # PyPI-Wheel enthält GPU-Support (device='cuda'); nutzt nvidia-nccl-cu12, parallel zu TF/PyTorch
