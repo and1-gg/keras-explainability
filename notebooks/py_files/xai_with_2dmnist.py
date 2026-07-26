@@ -10,9 +10,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: py-uv_keras_xai (uv)
+#     display_name: py-uv_keras-xai (uv)
 #     language: python
-#     name: py-uv_keras_xai
+#     name: py-uv_keras-xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -359,9 +359,11 @@ def plot_lrp(model, x_test, y_test, n_samples=5,
 # ## 6. LRP ausführen
 
 # %%
+"""
 if __name__ == "__main__":
     print("\nLRP-Erklärungen berechnen...")
     plot_lrp(model, x_test, y_test, n_samples=5,
              save_path="lrp_mnist_result.png")
+"""
 
 # %%

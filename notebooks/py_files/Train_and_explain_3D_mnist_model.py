@@ -10,9 +10,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: py-uv_keras_xai (uv)
+#     display_name: Python 3
 #     language: python
-#     name: py-uv_keras_xai
+#     name: python3
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -142,6 +142,25 @@ x = Dense(10, activation='softmax', name='preds')(x)
 model = Model(inputs, x)
 model.summary()
 
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 1. Beispieldaten erstellen (z. B. Werte von 0 bis 100)
+data = np.linspace(0, 100, 100).reshape((10, 10))
+
+# 2. Daten mit der 'jet'-Farbpalette darstellen
+plt.figure(figsize=(6, 5))
+img = plt.imshow(data, cmap='jet')
+
+# 3. Colorbar hinzufügen (Zahlenwerte werden automatisch angezeigt)
+cbar = plt.colorbar(img)
+cbar.set_label('Zahlenwerte', rotation=270, labelpad=15)
+
+plt.title("Beispiel für Colorbar mit 'jet'")
+plt.tight_layout()
+plt.show()
 
 # %%
 from tensorflow.keras.callbacks import ReduceLROnPlateau
