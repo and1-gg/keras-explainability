@@ -88,8 +88,13 @@ def fuse_batchnorm(model: Model) -> Model:
         input_layer = inputs[0]
 
         if not isinstance(input_layer, (Conv2D, Conv3D, Dense)):
-            raise ValueError('Unable to fuse BatchNormalization layer that '
-                             'does not have a conv or dense layer as input')
+            logger.warning(
+                'Skipping BatchNormalization fuse for layer %s: predecessor '
+                'is %s (only Conv/Dense supported). LRP treats BN as NoOp.',
+                layers[i].name,
+                type(input_layer).__name__,
+            )
+            continue
 
         batch_norm_layer = layers[i]
 
