@@ -55,6 +55,7 @@ NUM_TUNNELS = 6
 MAX_RADIUS = 10
 #N = 10
 N = 1000
+#N = 100
 
 def key(x: Any):
     if isinstance(x, tuple):
@@ -144,14 +145,14 @@ np.random.seed(42)
 brain = create_brain(size=32, width=5, num_tunnels=6)
 vol = brain[..., 0]  # Shape: (32, 32, 32)
 
-# Voxel-Koordinaten und Werte
-z, y, x = np.mgrid[0:vol.shape[0], 0:vol.shape[1], 0:vol.shape[2]]
+# Voxel-Koordinaten und Werte (nicht y/x/z — y sind die Regressions-Labels!)
+grid_z, grid_y, grid_x = np.mgrid[0:vol.shape[0], 0:vol.shape[1], 0:vol.shape[2]]
 
 fig = go.Figure(
     data=go.Volume(
-        x=x.flatten(),
-        y=y.flatten(),
-        z=z.flatten(),
+        x=grid_x.flatten(),
+        y=grid_y.flatten(),
+        z=grid_z.flatten(),
         value=vol.flatten(),
         isomin=0.25,          # Schwelle: nur „Gewebe“, Tunnel (0) weg
         isomax=1.0,
@@ -180,9 +181,9 @@ fig.show()  # im Notebook: Maus ziehen zum Drehen, Scroll zum Zoomen
 # %%
 fig = go.Figure(
     data=go.Isosurface(
-        x=x.flatten(),
-        y=y.flatten(),
-        z=z.flatten(),
+        x=grid_x.flatten(),
+        y=grid_y.flatten(),
+        z=grid_z.flatten(),
         value=vol.flatten(),
         isomin=0.25,
         isomax=1.0,
@@ -204,7 +205,12 @@ if X.ndim == 4:
 assert X.shape[1:] == (IMAGE_SIZE, IMAGE_SIZE, IMAGE_SIZE, 1), (
     f"X.shape={X.shape}, erwartet (N, {IMAGE_SIZE}, {IMAGE_SIZE}, {IMAGE_SIZE}, 1)"
 )
-y = np.asarray(y).reshape((-1, 1))
+y = np.asarray(y).reshape((-1,))
+assert len(X) == len(y), (
+    f"X/y desynchron: len(X)={len(X)}, len(y)={len(y)} — "
+    "wurde y überschrieben (z.B. durch np.mgrid)?"
+)
+y = y.reshape((-1, 1))
 train_X = X[:int(0.6*len(X))]
 train_y = y[:int(0.6*len(X))]
 
@@ -213,6 +219,7 @@ val_y = y[int(0.6*len(X)):int(0.8*len(X))]
 
 test_X = X[int(0.8*len(X)):]
 test_y = y[int(0.8*len(X)):]
+print(f"Split: train={len(train_X)}, val={len(val_X)}, test={len(test_X)}")
 
 # %%
 1+1
@@ -221,14 +228,16 @@ test_y = y[int(0.8*len(X)):]
 import numpy as np
 import tensorflow as tf
 
-# GPU Safe-Init
+# GPU Safe-Init (float32: LRP verträgt mixed_float16 nicht)
 gpus = tf.config.list_physical_devices('GPU')
+print(f"GPUs: {len(gpus)} — {[g.name for g in gpus]}")
 if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
 
 from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy("mixed_float16")
+# float32: mixed_float16 bricht LRP (Dtype-Konflikt) und MaxPool3D auf CPU
+mixed_precision.set_global_policy("float32")
 
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Activation, BatchNormalization, Conv3D, Dense, Dropout, Input, \
@@ -264,7 +273,8 @@ x = BatchNormalization()(x)
 x = Activation(activation)(x)
 x = GlobalAveragePooling3D()(x)
 
-x = Dense(32, activation='relu')(x)
+x = Dense(32, activation=None)(x)
+x = Activation(activation)(x)
 x = Dropout(dropout)(x)
 x = Dense(1, activation=None)(x)
 
@@ -385,13 +395,21 @@ fig.add_trace(
 , row=1, col=3)
 
 # %%
+from tensorflow.keras import mixed_precision
+from tensorflow.keras.models import clone_model
+
 from explainability import LayerwiseRelevancePropagator, LRPStrategy
 
 
+# LRP braucht float32 (auch wenn Training mit mixed_float16 lief)
+mixed_precision.set_global_policy("float32")
+lrp_model = clone_model(model)
+lrp_model.set_weights([np.asarray(w, dtype=np.float32) for w in model.get_weights()])
+
+# 6 StandardLRP-Layer: 4× Conv3D + Dense(32) + Dense(1); Pooling zählt nicht
 strategy = LRPStrategy(
     layers=[
         {'flat': True},
-        {'alpha': 2, 'beta': 1},
         {'alpha': 2, 'beta': 1},
         {'alpha': 2, 'beta': 1},
         {'alpha': 2, 'beta': 1},
@@ -400,20 +418,30 @@ strategy = LRPStrategy(
     ]
 )
 
-explainer = LayerwiseRelevancePropagator(model, layer=-1, idx=0, strategy=strategy)
+explainer = LayerwiseRelevancePropagator(lrp_model, layer=-1, idx=0, strategy=strategy)
 
-for i in range(1, MAX_RADIUS + 1):
+assert len(test_X) == len(test_y), (
+    f"test_X/test_y desynchron: {len(test_X)} vs {len(test_y)} — Split-Zelle neu ausführen"
+)
+labels = np.asarray(test_y).ravel()
+for radius in range(1, MAX_RADIUS + 1):
+    matches = np.flatnonzero(labels == radius)
+    if matches.size == 0:
+        print(f"Skip radius {radius}: kein Sample in test_y")
+        continue
+    idx = int(matches[0])
+    sample = np.asarray(test_X[idx:idx + 1], dtype=np.float32)
+
     fig, ax = plt.subplots(2, 8, figsize=(15, 3))
-    idx = np.where(test_y == i)[0][0]
-    explanations = explainer(test_X[idx:(idx + 1)])
+    explanations = explainer.predict(sample, verbose=0)
     explanations = explanations / np.amax(np.abs(explanations))
-    
+
     for j in range(8):
-        ax[0][j].imshow(test_X[idx,12+j], cmap='Greys_r')
+        ax[0][j].imshow(test_X[idx, 12 + j], cmap='Greys_r')
         ax[0][j].axis('off')
-        ax[1][j].imshow(explanations[0,12+j], cmap='seismic', clim=(-1, 1))
+        ax[1][j].imshow(explanations[0, 12 + j], cmap='seismic', clim=(-1, 1))
         ax[1][j].axis('off')
-        
+
 plt.show()
 
 # %%
@@ -569,7 +597,17 @@ layout = go.Layout(
 iplot(go.Figure(traces, layout))
 
 # %%
-explainer = LayerwiseRelevancePropagator(model, layer=20, idx=0, strategy=strategy)
+# Erstes Modell: Output=Dense(1), Bottleneck=Dense(32) ohne built-in Activation
+# (RestructuredLRP verlangt lineare Bottleneck-Dense + optionale Activation/Dropout dazwischen)
+output_layer = len(model.layers) - 1
+bottleneck_layer = next(
+    i for i, l in enumerate(model.layers)
+    if isinstance(l, Dense) and int(l.units) == 32
+)
+
+explainer = LayerwiseRelevancePropagator(
+    model, layer=output_layer, idx=0, strategy=strategy
+)
 explanations = explainer.predict(np.expand_dims(brain, 0))[0]
 explanations = explanations / np.amax(np.abs(explanations))
 
@@ -584,12 +622,12 @@ for i in range(0, 8, 2):
         ax[i+1][j].imshow(explanations[idx], cmap='seismic', clim=(-1, 1))
         ax[i+1][j].axis('off')
         
-plt.savefig('standard.png')
+#plt.savefig('standard.png')
 
 plt.show()
 
 # %%
-encoder = Model(model.input, model.layers[17].output)
+encoder = Model(model.input, model.layers[bottleneck_layer].output)
 encodings = encoder.predict(test_X)
 group_idx = np.where(test_y == 5)[0]
 group_encodings = encodings[group_idx]
@@ -597,9 +635,12 @@ mean_encoding = np.mean(group_encodings, axis=0)
 encoding_stddev = np.std(group_encodings, axis=0)
 
 # %%
+"""
 from explainability import RestructuredLRP
     
-restructured_lrp = RestructuredLRP(model, layer=20, idx=0, bottleneck=17, strategy=strategy)
+restructured_lrp = RestructuredLRP(
+    model, layer=output_layer, idx=0, bottleneck=bottleneck_layer, strategy=strategy
+)
 restructured_explanations = restructured_lrp.predict([np.expand_dims(brain, 0), 
                                                       np.expand_dims(mean_encoding, 0)])[0]
 restructured_explanations = restructured_explanations / np.amax(np.abs(restructured_explanations))
@@ -618,11 +659,16 @@ for i in range(8):
     ax[3][i].axis('off')
 
 plt.show()
+"""
 
 # %%
+"""
 from explainability import RestructuredLRP
     
-restructured_lrp = RestructuredLRP(model, layer=20, idx=0, bottleneck=17, strategy=strategy, threshold=True)
+restructured_lrp = RestructuredLRP(
+    model, layer=output_layer, idx=0, bottleneck=bottleneck_layer,
+    strategy=strategy, threshold=True
+)
 restructured_explanations = restructured_lrp.predict([np.expand_dims(brain, 0), 
                                                       np.expand_dims(mean_encoding, 0),
                                                       np.expand_dims(encoding_stddev, 0)])[0]
@@ -642,9 +688,10 @@ for i in range(8):
     ax[3][i].axis('off')
 
 plt.show()
+"""
 
 # %%
-tmp = Model(model.input, model.layers[17].output)
+tmp = Model(model.input, model.layers[bottleneck_layer].output)
 
 strategy = LRPStrategy(
     layers=[
@@ -653,7 +700,6 @@ strategy = LRPStrategy(
         {'alpha': 2, 'beta': 1},
         {'alpha': 2, 'beta': 1},
         {'alpha': 2, 'beta': 1},
-        {'alpha': 2, 'beta': 1}
     ]
 )
 
@@ -667,7 +713,9 @@ for i in range(8):
 plt.show()
 
 for i in range(32):
-    explainer = LayerwiseRelevancePropagator(tmp, layer=17, idx=i, strategy=strategy)
+    explainer = LayerwiseRelevancePropagator(
+        tmp, layer=len(tmp.layers) - 1, idx=i, strategy=strategy
+    )
     explanations = explainer.predict(np.expand_dims(brain, 0))[0]
 
     if np.sum(explanations) == 0:
@@ -720,16 +768,15 @@ for i in range(3):
     x = Activation(activation)(x)
     x = MaxPooling3D((2, 2, 2))(x)
 
-x = BatchNormalization()(x)
-
+# Kein BN nach Pooling — fuse_batchnorm kann nur Conv/Dense→BN fusionieren
 x = Activation(activation)(x)
 x = Reshape((-1,))(x)
 x = Dropout(dropout)(x)
 
-x = Dense(128, activation='relu')(x)
+x = Dense(128, activation=None)(x)
 x = BatchNormalization()(x)
 x = Activation(activation)(x)
-x = Dense(128, activation='relu')(x)
+x = Dense(128, activation=None)(x)
 x = BatchNormalization()(x)
 x = Activation(activation)(x)
 
@@ -802,7 +849,16 @@ strategy = LRPStrategy(
     ]
 )
 
-explainer = LayerwiseRelevancePropagator(model, layer=25, idx=0, strategy=strategy)
+# Zweites Modell: Output=Dense(1), Bottleneck=Dense(32) (linear, für RestructuredLRP)
+output_layer = len(model.layers) - 1
+bottleneck_layer = next(
+    i for i, l in enumerate(model.layers)
+    if isinstance(l, Dense) and int(l.units) == 32
+)
+
+explainer = LayerwiseRelevancePropagator(
+    model, layer=output_layer, idx=0, strategy=strategy
+)
 explanations = explainer.predict(np.expand_dims(brain, 0))[0]
 explanations = explanations / np.amax(np.abs(explanations))
 
@@ -820,7 +876,7 @@ for i in range(0, 8, 2):
 plt.show()
 
 # %%
-tmp = Model(model.input, model.layers[-2].output)
+tmp = Model(model.input, model.layers[bottleneck_layer].output)
 
 strategy = LRPStrategy(
     layers=[
@@ -902,9 +958,12 @@ for i in range(0, 8, 2):
 plt.show()
 
 # %%
+"""
 from explainability import RestructuredLRP
     
-restructured_lrp = RestructuredLRP(model, layer=25, idx=0, bottleneck=23, strategy=strategy)
+restructured_lrp = RestructuredLRP(
+    model, layer=output_layer, idx=0, bottleneck=bottleneck_layer, strategy=strategy
+)
 restructured_explanations = restructured_lrp.predict([np.expand_dims(brain, 0), 
                                                       np.expand_dims(mean_encoding, 0)])[0]
 restructured_explanations = restructured_explanations / np.amax(np.abs(restructured_explanations))
@@ -923,9 +982,10 @@ for i in range(8):
     ax[3][i].axis('off')
 
 plt.show()
+"""
 
 # %%
-encoder = Model(model.input, model.layers[-3].output)
+encoder = Model(model.input, model.layers[bottleneck_layer].output)
 encodings = encoder.predict(test_X)
 group_idx = np.where(test_y == 5)[0]
 group_encodings = encodings[group_idx]
@@ -933,9 +993,13 @@ mean_encoding = np.mean(group_encodings, axis=0)
 encoding_stddev = np.std(group_encodings, axis=0)
 
 # %%
+"""
 from explainability import RestructuredLRP
     
-restructured_lrp = RestructuredLRP(model, layer=25, idx=0, bottleneck=23, strategy=strategy, threshold=True)
+restructured_lrp = RestructuredLRP(
+    model, layer=output_layer, idx=0, bottleneck=bottleneck_layer,
+    strategy=strategy, threshold=True
+)
 restructured_explanations = restructured_lrp.predict([np.expand_dims(brain, 0), 
                                                       np.expand_dims(mean_encoding, 0),
                                                       np.expand_dims(encoding_stddev * 8, 0)])[0]
@@ -955,6 +1019,7 @@ for i in range(8):
     ax[3][i].axis('off')
 
 plt.show()
+"""
 
 # %%
 
