@@ -10,9 +10,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: py-uv_keras_xai (uv)
+#     display_name: py-uv_keras-xai (uv)
 #     language: python
-#     name: py-uv_keras_xai
+#     name: py-uv_keras-xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -136,9 +136,74 @@ plt.show()
 1+1
 
 # %%
+import numpy as np
+import plotly.graph_objects as go
+
+# Ein synthetisches Gehirn erzeugen (wie im Notebook)
+np.random.seed(42)
+brain = create_brain(size=32, width=5, num_tunnels=6)
+vol = brain[..., 0]  # Shape: (32, 32, 32)
+
+# Voxel-Koordinaten und Werte
+z, y, x = np.mgrid[0:vol.shape[0], 0:vol.shape[1], 0:vol.shape[2]]
+
+fig = go.Figure(
+    data=go.Volume(
+        x=x.flatten(),
+        y=y.flatten(),
+        z=z.flatten(),
+        value=vol.flatten(),
+        isomin=0.25,          # Schwelle: nur „Gewebe“, Tunnel (0) weg
+        isomax=1.0,
+        opacity=0.15,         # etwas transparent → Tunnel sichtbar
+        surface_count=12,
+        colorscale="Greys",
+        caps=dict(x_show=False, y_show=False, z_show=False),
+    )
+)
+
+fig.update_layout(
+    title="Synthetisches Gehirn (drehbar)",
+    scene=dict(
+        xaxis_title="X",
+        yaxis_title="Y",
+        zaxis_title="Z",
+        aspectmode="data",
+    ),
+    width=700,
+    height=700,
+    margin=dict(l=0, r=0, t=40, b=0),
+)
+
+fig.show()  # im Notebook: Maus ziehen zum Drehen, Scroll zum Zoomen
+
+# %%
+fig = go.Figure(
+    data=go.Isosurface(
+        x=x.flatten(),
+        y=y.flatten(),
+        z=z.flatten(),
+        value=vol.flatten(),
+        isomin=0.25,
+        isomax=1.0,
+        surface_count=1,
+        colorscale="Greys",
+        opacity=0.7,
+        caps=dict(x_show=False, y_show=False, z_show=False),
+    )
+)
+fig.update_layout(scene_aspectmode="data", width=700, height=700)
+fig.show()
+
+# %%
 from plotly.figure_factory import create_distplot
 
 X = np.asarray(X)
+if X.ndim == 4:
+    X = X[..., np.newaxis]
+assert X.shape[1:] == (IMAGE_SIZE, IMAGE_SIZE, IMAGE_SIZE, 1), (
+    f"X.shape={X.shape}, erwartet (N, {IMAGE_SIZE}, {IMAGE_SIZE}, {IMAGE_SIZE}, 1)"
+)
 y = np.asarray(y).reshape((-1, 1))
 train_X = X[:int(0.6*len(X))]
 train_y = y[:int(0.6*len(X))]
@@ -174,8 +239,7 @@ from tensorflow.keras.regularizers import l2
 np.random.seed(42)
 tf.random.set_seed(42)
 
-IMAGE_SIZE = 128  # <<< wichtig, sonst NameError
-
+# IMAGE_SIZE muss zu den erzeugten Daten passen (oben: 32)
 regularizer = l2(1e-3)
 depths = [32, 64, 128, 256, 256, 64]
 activation='relu'
