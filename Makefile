@@ -24,10 +24,15 @@ help: ## Zeigt alle verfügbaren Targets mit Beschreibung
 setup: ## uv sync + Jupyter-Kernel registrieren
 	uv sync
 	uv run python -m ipykernel install --user --name $(KERNEL_NAME) --display-name "$(KERNEL_NAME) (uv)"
+	uv run python scripts/nvidia_cuda_path.py --install
+
+# pip-nvidia-Wheels liegen unter site-packages/nvidia/*/lib — TF braucht sie in LD_LIBRARY_PATH
+NVIDIA_LIB_PATH := $(shell uv run python scripts/nvidia_cuda_path.py --print-ld 2>/dev/null)
 
 test-gpu: test-gpu-tensorflow test-gpu-pytorch test-gpu-xgboost ## Prüft GPU-Erkennung für TensorFlow, PyTorch und XGBoost
 
 test-gpu-tensorflow:
+	LD_LIBRARY_PATH="$(NVIDIA_LIB_PATH):$${LD_LIBRARY_PATH}" \
 	uv run python -c "import tensorflow as tf; print(\"tensor-flow-version: \", tf.__version__); print(\"Num GPUs Available: \", len(tf.config.list_physical_devices('GPU')))"
 
 test-gpu-pytorch:
