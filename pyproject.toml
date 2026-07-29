@@ -13,6 +13,7 @@ dependencies = [
     # (nur relevant/funktional unter Linux; auf macOS/Windows ohne GPU-Support)
     "numpy>=1.26.4",
     "plotly>=6.9.0",
+    "pytest>=9.1.1",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.7.2",
     "tensorflow-datasets>=4.9.10",
