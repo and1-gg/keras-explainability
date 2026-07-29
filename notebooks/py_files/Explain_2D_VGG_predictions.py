@@ -26,22 +26,11 @@
 # ---
 
 # %%
-import os
+import sys
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
-
-import sys
-
-# Get the current working directory
-notebook_dir = os.getcwd()
-
-# Construct the path to the 'src' directory
-src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
-
-
-# Add the 'src' directory to the Python path
-if src_dir not in sys.path:
-    sys.path.append(src_dir) 
 
 from tensorflow.keras.applications import VGG19
 from tensorflow.keras.applications.vgg19 import preprocess_input, decode_predictions
@@ -50,11 +39,23 @@ from skimage.transform import resize
 from explainability import LRP, LRPStrategy
 
 
-data = os.path.join(os.pardir, 'tests', 'data')
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
+
+
+repo_root = find_repo_root()
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+data = repo_root / "tests" / "data"
 model = VGG19(weights='imagenet')
 
-image = np.load(os.path.join(data, 'preprocessed_cat.npy'))
-original_image = np.load(os.path.join(data, 'original_cat.npy'))
+image = np.load(data / "preprocessed_cat.npy")
+original_image = np.load(data / "original_cat.npy")
 
 predictions = model.predict(np.expand_dims(image, 0))
 print(f'Predictions: {decode_predictions(predictions, 5)}')
@@ -64,7 +65,7 @@ explanations = lrp(np.expand_dims(image, 0))
 explanations = np.sum(explanations, axis=-1)
 explanations = explanations / np.amax(np.abs(explanations))
 
-innvestigate = np.load(os.path.join(data, 'cat_explanations_none.npy'))
+innvestigate = np.load(data / 'cat_explanations_none.npy')
 innvestigate = np.sum(innvestigate, axis=-1)
 innvestigate = innvestigate / np.amax(np.abs(innvestigate))
 
@@ -84,7 +85,7 @@ explanations = lrp(np.expand_dims(image, 0))
 explanations = np.sum(explanations, axis=-1)
 explanations = explanations / np.amax(np.abs(explanations))
 
-innvestigate = np.load(os.path.join(data, 'cat_explanations_eps.npy'))
+innvestigate = np.load(data / 'cat_explanations_eps.npy')
 innvestigate = np.sum(innvestigate, axis=-1)
 innvestigate = innvestigate / np.amax(np.abs(innvestigate))
 
@@ -104,7 +105,7 @@ explanations = lrp(np.expand_dims(image, 0))
 explanations = np.sum(explanations, axis=-1)
 explanations = explanations / np.amax(np.abs(explanations))
 
-innvestigate = np.load(os.path.join(data, 'cat_explanations_a1b0.npy'))
+innvestigate = np.load(data / 'cat_explanations_a1b0.npy')
 innvestigate = np.sum(innvestigate, axis=-1)
 
 fig, ax = plt.subplots(1, 2, figsize=(10, 5))
@@ -123,7 +124,7 @@ explanations = lrp(np.expand_dims(image, 0))
 explanations = np.sum(explanations, axis=-1)
 explanations = explanations / np.amax(np.abs(explanations))
 
-innvestigate = np.load(os.path.join(data, 'cat_explanations_a2b1.npy'))
+innvestigate = np.load(data / 'cat_explanations_a2b1.npy')
 innvestigate = np.sum(innvestigate, axis=-1)
 innvestigate = innvestigate / np.amax(np.abs(innvestigate))
 
@@ -170,7 +171,7 @@ explanations = lrp(np.expand_dims(image, 0) + np.amin(image))
 explanations = np.sum(explanations, axis=-1)
 explanations = explanations / np.amax(np.abs(explanations))
 
-innvestigate = np.load(os.path.join(data, 'cat_explanations_best.npy'))
+innvestigate = np.load(data / 'cat_explanations_best.npy')
 innvestigate = np.sum(innvestigate, axis=-1)
 innvestigate = innvestigate / np.amax(np.abs(innvestigate))
 
