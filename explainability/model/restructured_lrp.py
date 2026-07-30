@@ -126,7 +126,7 @@ class RestructuredLayerwiseRelevancePropagator(Model):
 
         for i in range(len(layers)):
             layer = layers[i]
-            layer_name = f'{name}/{len(layers) - (i + 1)}'
+            layer_name = f'{name}_{len(layers) - (i + 1)}'
             inputs = layer.input
             outputs = layer.output
             R = relevances[outputs.ref()]

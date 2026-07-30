@@ -46,9 +46,9 @@ class LayerwiseRelevancePropagator(Model):
         if len(output.shape) != 2:
             raise NotImplementedError('Unable to handle non-flat target layers')
 
-        indexes = tf.range(output.shape[-1], name=f'{name}/output/indexes')
+        indexes = tf.range(output.shape[-1], name=f'{name}_output_indexes')
         mask = indexes == idx
-        zeros = tf.zeros(output_shape, name=f'{name}/output/zeros')
+        zeros = tf.zeros(output_shape, name=f'{name}_output_zeros')
 
         masked_output = Lambda(
             lambda params: tf.where(*params, name=f'{name}_output_masked'),
