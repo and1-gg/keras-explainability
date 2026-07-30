@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -43,13 +43,14 @@ repo_root = find_repo_root()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-sys.path.append('/home/esten/repos/FastSurfer/FastSurferCNN')
+#sys.path.append('/home/esten/repos/FastSurfer/FastSurferCNN')
 
 # %%
 from pyment.data import NiftiDataset, AsyncNiftiGenerator
 from pyment.data.preprocessors import NiftiPreprocessor
 
-ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'IXI')
+#ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'IXI')
+ixi_folder = os.path.join(os.path.expanduser('/home/and1/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
 image_folder = os.path.join(ixi_folder, 'cropped')
 project_folder = os.path.join(os.path.expanduser('~'), 'projects', '')
 dataset = NiftiDataset.from_folder(image_folder, target='age')
