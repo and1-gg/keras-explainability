@@ -29,15 +29,6 @@
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-from tensorflow.keras.applications import VGG19
-from tensorflow.keras.applications.vgg19 import preprocess_input, decode_predictions
-from skimage.io import imread
-from skimage.transform import resize
-from explainability import LRP, LRPStrategy
-
 
 def find_repo_root() -> Path:
     p = Path.cwd().resolve()
@@ -50,6 +41,15 @@ def find_repo_root() -> Path:
 repo_root = find_repo_root()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from tensorflow.keras.applications import VGG19
+from tensorflow.keras.applications.vgg19 import preprocess_input, decode_predictions
+from skimage.io import imread
+from skimage.transform import resize
+from explainability import LRP, LRPStrategy
 
 data = repo_root / "tests" / "data"
 model = VGG19(weights='imagenet')
@@ -276,3 +276,5 @@ for i in range(len(explanations)):
         
         
 plt.show()
+
+# %%

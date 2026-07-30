@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -27,18 +27,20 @@
 
 # %%
 import sys
-import os
-
-# Get the current working directory
-notebook_dir = os.getcwd()
-
-# Construct the path to the 'src' directory
-src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
+from pathlib import Path
 
 
-# Add the 'src' directory to the Python path
-if src_dir not in sys.path:
-    sys.path.append(src_dir) 
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
+
+
+repo_root = find_repo_root()
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,18 +49,7 @@ from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.preprocessing import OneHotEncoder
 from typing import Tuple
 
-import git
 import ipynbname
-from pathlib import Path
-
-# 1. Root-Verzeichnis des Git-Repos ermitteln
-try:
-    repo = git.Repo(".", search_parent_directories=True)
-    repo_root = Path(repo.working_tree_dir)
-except git.InvalidGitRepositoryError:
-    # Fallback: Falls das Skript mal außerhalb eines Repos läuft,
-    # nutzen wir das aktuelle Arbeitsverzeichnis
-    repo_root = Path(".").resolve()
 
 # 2. Notebook-Namen holen
 # Unter nbconvert scheitert ipynbname oft (IndexError am Kernel-Connection-File)
@@ -67,7 +58,7 @@ try:
 except Exception:
     notebook_name = "Train_and_explain_dummy_geometric_data"
 
-# 3. Pfad zusammensetzen: (root-dir-des-repos) / trainings_runs / notebook_name
+# 3. Pfad zusammensetzen: (root-dir-des-repos) / output/notebooks / notebook_name
 target_dir = repo_root / "output/notebooks" / notebook_name
 
 # 4. Ordner erstellen
@@ -147,8 +138,6 @@ test_X = X[:300]
 test_y = y[:300]
 
 # %%
-from pathlib import Path
-
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Activation, BatchNormalization, Conv3D, Dense, Dropout, \
                                     Flatten, GlobalAveragePooling3D, Input, MaxPooling3D, Reshape
@@ -156,14 +145,7 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
 
-def find_repo_root() -> Path:
-    p = Path.cwd().resolve()
-    for candidate in [p, *p.parents]:
-        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
-            return candidate
-    return p
-
-MODEL_DIR = find_repo_root() / "output" / "notebooks" / notebook_name / "100_epochs"
+MODEL_DIR = repo_root / "output" / "notebooks" / notebook_name / "100_epochs"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODEL_DIR / "geometric_3d_cnn.keras"
 

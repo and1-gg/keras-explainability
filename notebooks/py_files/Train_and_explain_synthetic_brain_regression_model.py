@@ -27,17 +27,20 @@
 
 # %%
 import sys
-import os
+from pathlib import Path
 
-# Get the current working directory
-notebook_dir = os.getcwd()
 
-# Construct the path to the 'src' directory
-src_dir = os.path.abspath(os.path.join(os.path.dirname(os.getcwd()), '..'))
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
 
-# Add the 'src' directory to the Python path
-if src_dir not in sys.path:
-    sys.path.append(src_dir) 
+
+repo_root = find_repo_root()
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 import matplotlib.pyplot as plt
 import numpy as np

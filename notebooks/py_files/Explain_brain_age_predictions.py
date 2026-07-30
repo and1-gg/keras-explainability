@@ -28,7 +28,20 @@
 # %%
 import os
 import sys
+from pathlib import Path
 
+
+def find_repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "pyproject.toml").exists() or (candidate / "explainability").is_dir():
+            return candidate
+    return p
+
+
+repo_root = find_repo_root()
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 sys.path.append('/home/esten/repos/FastSurfer/FastSurferCNN')
 
