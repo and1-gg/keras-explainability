@@ -3,11 +3,11 @@
 # uv / local virtualenv
 .venv/
 
-# ignore data folder
-data/
+# ignore data folder (nur im Repo-Root, sonst wird auch pyment/data/ ignoriert)
+/data/
 
 # trained model checkpoints / runs (large binaries)
-trainings_runs/
+/trainings_runs/
 
 
 
