@@ -1,5 +1,5 @@
 [project]
-name = "py-uv_keras_xai"
+name = "py-uv_keras-xai"
 version = "0.1.0"
 description = "GPU environment for keras explainability (uv)"
 requires-python = ">=3.10,<3.11"

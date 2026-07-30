@@ -1,4 +1,4 @@
-KERNEL_NAME := py-uv_keras_xai
+KERNEL_NAME := py-uv_keras-xai
 
 PY_DIR    := notebooks/py_files
 NB_DIR    := notebooks/ipynb_files
