@@ -118,13 +118,19 @@ class LayerwiseRelevancePropagator(Model):
 
                 relevances[name] = relevance[j]
 
+        # Keras 3: model.inputs is always a list. Unwrap the common
+        # single-input case so callers get a tensor, not [tensor].
         inputs = model.inputs
-        outputs = [relevances[layer.name] for layer in inputs] \
-                  if isinstance(inputs, list) else \
-                  relevances[inputs.name]
+        input_list = inputs if isinstance(inputs, list) else [inputs]
+        outputs = [relevances[t.name] for t in input_list]
 
         if include_prediction:
             outputs = [original_output] + outputs
+        elif len(outputs) == 1:
+            outputs = outputs[0]
+
+        if isinstance(inputs, list) and len(inputs) == 1:
+            inputs = inputs[0]
 
         super().__init__(inputs, outputs)
 
