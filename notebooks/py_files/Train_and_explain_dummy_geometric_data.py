@@ -8,11 +8,11 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: py-uv_keras_xai (uv)
+#     display_name: py-uv_keras-xai (uv)
 #     language: python
-#     name: py-uv_keras_xai
+#     name: py-uv_keras-xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -47,9 +47,39 @@ from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.preprocessing import OneHotEncoder
 from typing import Tuple
 
+import git
+import ipynbname
+from pathlib import Path
 
+# 1. Root-Verzeichnis des Git-Repos ermitteln
+try:
+    repo = git.Repo(".", search_parent_directories=True)
+    repo_root = Path(repo.working_tree_dir)
+except git.InvalidGitRepositoryError:
+    # Fallback: Falls das Skript mal außerhalb eines Repos läuft,
+    # nutzen wir das aktuelle Arbeitsverzeichnis
+    repo_root = Path(".").resolve()
+
+# 2. Notebook-Namen holen
+# Unter nbconvert scheitert ipynbname oft (IndexError am Kernel-Connection-File)
+try:
+    notebook_name = ipynbname.name()
+except Exception:
+    notebook_name = "Train_and_explain_dummy_geometric_data"
+
+# 3. Pfad zusammensetzen: (root-dir-des-repos) / trainings_runs / notebook_name
+target_dir = repo_root / "output/notebooks" / notebook_name
+
+# 4. Ordner erstellen
+target_dir.mkdir(parents=True, exist_ok=True)
+
+print(f"Zielordner ist: {target_dir}")
+
+# für wiederholung
 np.random.seed(42)
 
+
+# %%
 def generate_square(shape: Tuple[int] = (16, 16, 16)) -> np.ndarray:
     img = np.zeros(shape)
     corner = np.asarray(shape) // 4 + np.random.randint(0, shape[0] // 2, 3)
@@ -95,13 +125,18 @@ y = y[idx]
 print(f'X.shape: {X.shape}')
 print(f'y.shape: {y.shape}')
 
-for i in range(10):
-    fig, ax = plt.subplots(1, shape, figsize=(15, 2))
-    fig.suptitle(y[i])
+n = 10
+fig, ax = plt.subplots(n, shape, figsize=(15, 2 * n))
+
+for i in range(n):
+    ax[i][shape // 2].set_title(str(y[i]))
     for j in range(shape):
-        ax[j].imshow(X[i,j], cmap='Greys_r')
-        ax[j].axis('off')
-    plt.show()
+        ax[i][j].imshow(X[i, j], cmap='Greys_r')
+        ax[i][j].axis('off')
+
+fig.savefig(target_dir / '1_geometric_samples_overview.png', bbox_inches='tight', dpi=150)
+plt.show()
+plt.close(fig)
 
 encoder = OneHotEncoder()
 y = encoder.fit_transform(y.reshape(-1, 1)).toarray()
@@ -128,7 +163,7 @@ def find_repo_root() -> Path:
             return candidate
     return p
 
-MODEL_DIR = find_repo_root() / "trainings_runs" / "100_epochs"
+MODEL_DIR = find_repo_root() / "output" / "notebooks" / notebook_name / "100_epochs"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODEL_DIR / "geometric_3d_cnn.keras"
 
@@ -163,11 +198,21 @@ model = Model(input, x)
 
 model.compile(loss='categorical_crossentropy', optimizer=Adam(1e-4), metrics=['accuracy'])
 
-#model.fit(train_X, train_y, validation_data=(test_X, test_y), batch_size=32,
-#          epochs=100)
+existing_model_path = MODEL_PATH if MODEL_PATH.exists() else next(MODEL_DIR.glob("*.model"), None)
+if existing_model_path is not None:
+    model = load_model(existing_model_path)
+    print(f"Model geladen von: {existing_model_path}")
+else:
+    model.fit(
+        train_X,
+        train_y,
+        validation_data=(test_X, test_y),
+        batch_size=32,
+        epochs=100,
+    )
 
-#model.save(MODEL_PATH)
-print(f"Model gespeichert unter: {MODEL_PATH}")
+    model.save(MODEL_PATH)
+    print(f"Model gespeichert unter: {MODEL_PATH}")
 
 model = load_model(MODEL_PATH)
 print(f"Model geladen von: {MODEL_PATH}")
@@ -226,9 +271,14 @@ for i in range(10):
         fig, ax = plt.subplots(1, shape, figsize=(15, 2))
         fig.suptitle(f'{classname} explanation')
         for j in range(shape):
-            ax[j].imshow(explanation[0,j], cmap='seismic', clim=(-1, 1))
+            im = ax[j].imshow(explanation[0,j], cmap='seismic', clim=(-1, 1))
             ax[j].axis('off')
+        fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
         plt.show()
+
+fig.savefig(target_dir / '2_geometric_samples_explanations.png', bbox_inches='tight', dpi=150)
+plt.show()
+plt.close(fig)        
 
 
 # %%
@@ -292,9 +342,9 @@ for i in range(len(combinations)):
         fig.suptitle(f'{classname} explanation')
         
         for k in range(shape):
-            ax[k].imshow(explanation[k], cmap='seismic', clim=(-1, 1))
+            im = ax[k].imshow(explanation[k], cmap='seismic', clim=(-1, 1))
             ax[k].axis('off')
-            
+        fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
         plt.show()
         
     square_explanation = explainers['square'].predict(np.expand_dims(combinations[i], axis=0))[0]
@@ -309,11 +359,86 @@ for i in range(len(combinations)):
     fig.suptitle('Square explanation - circle explanation')
 
     for j in range(shape):
-        ax[j].imshow(absolute_difference[j], cmap='seismic', clim=(-1, 1))
+        im = ax[j].imshow(absolute_difference[j], cmap='seismic', clim=(-1, 1))
         ax[j].axis('off')
-
+    fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
     plt.show()
 
+
+# %%
+from scipy.spatial.distance import euclidean
+
+labels = encoder.categories_[0]
+
+square = np.zeros((16, 16, 16, 1))
+square[4:12, 4:12, 4:12, 0] = 1
+
+circle = np.zeros((16, 16, 16, 1))
+center = (8, 8, 8)
+radius = 4
+for i in range(16):
+    for j in range(16):
+        for k in range(16):
+            if euclidean((i, j, k), center) <= radius:
+                circle[i, j, k, 0] = 1
+
+combinations = [
+    np.concatenate([square[:8], circle[8:]], axis=0),
+    np.concatenate([circle[:8], square[8:]], axis=0),
+    np.concatenate([square[:, :8], circle[:, 8:]], axis=1),
+    np.concatenate([circle[:, :8], square[:, 8:]], axis=1),
+    np.concatenate([square[:, :, :8], circle[:, :, 8:]], axis=2),
+    np.concatenate([circle[:, :, :8], square[:, :, 8:]], axis=2),
+]
+
+# Square + Circle + je Combination: Input + 3 Erklärungen + Differenz
+n_rows = 2 + len(combinations) * (1 + 3 + 1)
+fig, ax = plt.subplots(n_rows, shape, figsize=(16, 2 * n_rows))
+row = 0
+
+def plot_row(data, title, cmap='Greys_r', clim=None, colorbar=False):
+    global row
+    ax[row][shape // 2].set_title(title)
+    im = None
+    for j in range(shape):
+        kwargs = {'cmap': cmap}
+        if clim is not None:
+            kwargs['clim'] = clim
+        im = ax[row][j].imshow(data[j], **kwargs)
+        ax[row][j].axis('off')
+    if colorbar:
+        fig.colorbar(im, ax=ax[row], fraction=0.015, pad=0.01)
+    row += 1
+
+plot_row(square, 'Square')
+plot_row(circle, 'Circle')
+
+for i, combo in enumerate(combinations):
+    prediction = model.predict(np.expand_dims(combo, axis=0))[0]
+    title = ' '.join([f'{labels[c]}: {prediction[c]:.2f}' for c in range(len(labels))])
+    plot_row(combo, title)
+
+    for classname in labels:
+        explanation = explainers[classname].predict(np.expand_dims(combo, axis=0))[0]
+        explanation = explanation / np.amax(np.abs(explanation))
+        plot_row(explanation, f'{classname} explanation',
+                 cmap='seismic', clim=(-1, 1), colorbar=True)
+
+    square_explanation = explainers['square'].predict(np.expand_dims(combo, axis=0))[0]
+    square_explanation = square_explanation - np.amin(square_explanation)
+    square_explanation = square_explanation / np.amax(square_explanation)
+    circle_explanation = explainers['circle'].predict(np.expand_dims(combo, axis=0))[0]
+    circle_explanation = circle_explanation - np.amin(circle_explanation)
+    circle_explanation = circle_explanation / np.amax(circle_explanation)
+    absolute_difference = square_explanation - circle_explanation
+
+    plot_row(absolute_difference, 'Square explanation - circle explanation',
+             cmap='seismic', clim=(-1, 1), colorbar=True)
+
+fig.savefig(target_dir / '3_geometric_combinations_explanations.png',
+            bbox_inches='tight', dpi=150)
+plt.show()
+plt.close(fig)
 
 # %% [markdown]
 # # 3d plot
@@ -345,7 +470,7 @@ def plot_volume_plotly(vol: np.ndarray, title: str = "", threshold: float = 0.5)
         ),
         margin=dict(l=0, r=0, t=40, b=0),
     )
-    fig.show()
+    return fig
 
 
 def plot_random_volumes_plotly(
@@ -356,7 +481,7 @@ def plot_random_volumes_plotly(
     seed: int = 42,
     class_names=None,
 ):
-    """10 (oder n) zufällige 3D-Volumen als interaktive Plotly-Subplots."""
+    """n zufällige 3D-Volumen als eine interaktive Plotly-Figur."""
     rng = np.random.default_rng(seed)
     idxs = rng.choice(len(X), size=min(n, len(X)), replace=False)
 
@@ -396,7 +521,6 @@ def plot_random_volumes_plotly(
             col=col + 1,
         )
 
-    # X: (N, D, H, W, 1)
     d, h, w = X.shape[1], X.shape[2], X.shape[3]
     scene_layout = dict(
         aspectmode="cube",
@@ -404,7 +528,6 @@ def plot_random_volumes_plotly(
         yaxis=dict(range=[0, h], title="y"),
         zaxis=dict(range=[0, d], title="z"),
     )
-
     layout_scenes = {f"scene{k+1}" if k else "scene": scene_layout for k in range(n_plots)}
     fig.update_layout(
         title=f"{n_plots} zufällige 3D-Samples",
@@ -413,10 +536,12 @@ def plot_random_volumes_plotly(
         margin=dict(l=0, r=0, t=60, b=0),
         **layout_scenes,
     )
-    #fig.show()
-    fig.show(renderer="notebook")
+    return fig
 
-# 10 zufällig ausgewählte Samples aus X
-plot_random_volumes_plotly(
+
+fig = plot_random_volumes_plotly(
     X, y, n=10, seed=42, class_names=encoder.categories_[0]
 )
+fig.write_html(target_dir / "4_geometric_3d_samples.html")
+#fig.write_image(target_dir / "4_geometric_3d_samples.png", scale=2)
+fig.show(renderer="notebook")

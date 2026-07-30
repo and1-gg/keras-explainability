@@ -5,12 +5,16 @@ NB_DIR    := notebooks/ipynb_files
 HTML_DIR  := notebooks/html_files
 
 .PHONY: help setup kernel test-gpu test-gpu-tensorflow test-gpu-pytorch test-gpu-xgboost \
-        notebooks-from-py py-from-notebooks sync-py-and-ipynb \
+        notebooks-from-py notebook-from-single-py \
+        py-from-notebooks py-from-single-notebook sync-py-and-ipynb \
         run-notebooks html-from-notebooks html-from-single-notebook \
         html-from-notebook-with-quarto clean-notebooks
 
-# Erlaubt: make html-from-single-notebook Foo.ipynb  (ohne "No rule to make target")
+# Erlaubt: make … Foo.ipynb / Foo.py  (ohne "No rule to make target")
 %.ipynb:
+	@:
+
+%.py:
 	@:
 
 help: ## Zeigt alle verfügbaren Targets mit Beschreibung
@@ -20,10 +24,15 @@ help: ## Zeigt alle verfügbaren Targets mit Beschreibung
 setup: ## uv sync + Jupyter-Kernel registrieren
 	uv sync
 	uv run python -m ipykernel install --user --name $(KERNEL_NAME) --display-name "$(KERNEL_NAME) (uv)"
+	uv run python scripts/nvidia_cuda_path.py --install
+
+# pip-nvidia-Wheels liegen unter site-packages/nvidia/*/lib — TF braucht sie in LD_LIBRARY_PATH
+NVIDIA_LIB_PATH := $(shell uv run python scripts/nvidia_cuda_path.py --print-ld 2>/dev/null)
 
 test-gpu: test-gpu-tensorflow test-gpu-pytorch test-gpu-xgboost ## Prüft GPU-Erkennung für TensorFlow, PyTorch und XGBoost
 
 test-gpu-tensorflow:
+	LD_LIBRARY_PATH="$(NVIDIA_LIB_PATH):$${LD_LIBRARY_PATH}" \
 	uv run python -c "import tensorflow as tf; print(\"tensor-flow-version: \", tf.__version__); print(\"Num GPUs Available: \", len(tf.config.list_physical_devices('GPU')))"
 
 test-gpu-pytorch:
@@ -42,6 +51,44 @@ notebooks-from-py: ## py_files -> ipynb_files (z.B. nach frischem Clone)
 			"$$f" -o "$(NB_DIR)/$$name.ipynb"; \
 	done
 
+notebook-from-single-py: ## Einzelnes .py -> .ipynb (z.B. make notebook-from-single-py Foo.py)
+	@py_args="$(filter %.py,$(MAKECMDGOALS))"; \
+	count=$$(echo "$$py_args" | wc -w); \
+	if [ -n "$(PY)" ]; then \
+		if [ "$$count" -gt 0 ]; then \
+			echo "Bitte nur PY=… oder genau ein *.py-Argument angeben, nicht beides."; \
+			exit 1; \
+		fi; \
+		py="$(PY)"; \
+	elif [ "$$count" -eq 0 ]; then \
+		echo "Usage: make notebook-from-single-py <name>.py"; \
+		echo "   or: make notebook-from-single-py PY=<name>.py"; \
+		exit 1; \
+	elif [ "$$count" -gt 1 ]; then \
+		echo "Bitte genau ein *.py-File angeben (erhalten: $$count)."; \
+		exit 1; \
+	else \
+		py="$$(echo "$$py_args" | awk '{print $$1}')"; \
+	fi; \
+	case "$$py" in \
+		*.py) ;; \
+		*) echo "Datei muss auf .py enden: $$py"; exit 1 ;; \
+	esac; \
+	case "$$py" in \
+		*/*) ;; \
+		*) py="$(PY_DIR)/$$py" ;; \
+	esac; \
+	if [ ! -f "$$py" ]; then \
+		echo "Python-Datei nicht gefunden: $$py"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(NB_DIR)"; \
+	name=$$(basename "$$py" .py); \
+	echo "Convert: $$py -> $(NB_DIR)/$$name.ipynb"; \
+	uv run jupytext --to notebook --set-kernel $(KERNEL_NAME) \
+		--set-formats "notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent" \
+		"$$py" -o "$(NB_DIR)/$$name.ipynb"
+
 py-from-notebooks: ## ipynb_files -> py_files (falls py_files verlorengingen)
 	@mkdir -p "$(PY_DIR)"
 	@for f in "$(NB_DIR)"/*.ipynb; do \
@@ -51,6 +98,44 @@ py-from-notebooks: ## ipynb_files -> py_files (falls py_files verlorengingen)
 			--set-formats "notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent" \
 			"$$f" -o "$(PY_DIR)/$$name.py"; \
 	done
+
+py-from-single-notebook: ## Einzelnes .ipynb -> .py (z.B. make py-from-single-notebook Foo.ipynb)
+	@nb_args="$(filter %.ipynb,$(MAKECMDGOALS))"; \
+	count=$$(echo "$$nb_args" | wc -w); \
+	if [ -n "$(NB)" ]; then \
+		if [ "$$count" -gt 0 ]; then \
+			echo "Bitte nur NB=… oder genau ein *.ipynb-Argument angeben, nicht beides."; \
+			exit 1; \
+		fi; \
+		nb="$(NB)"; \
+	elif [ "$$count" -eq 0 ]; then \
+		echo "Usage: make py-from-single-notebook <name>.ipynb"; \
+		echo "   or: make py-from-single-notebook NB=<name>.ipynb"; \
+		exit 1; \
+	elif [ "$$count" -gt 1 ]; then \
+		echo "Bitte genau ein *.ipynb-File angeben (erhalten: $$count)."; \
+		exit 1; \
+	else \
+		nb="$$(echo "$$nb_args" | awk '{print $$1}')"; \
+	fi; \
+	case "$$nb" in \
+		*.ipynb) ;; \
+		*) echo "Datei muss auf .ipynb enden: $$nb"; exit 1 ;; \
+	esac; \
+	case "$$nb" in \
+		*/*) ;; \
+		*) nb="$(NB_DIR)/$$nb" ;; \
+	esac; \
+	if [ ! -f "$$nb" ]; then \
+		echo "Notebook nicht gefunden: $$nb"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(PY_DIR)"; \
+	name=$$(basename "$$nb" .ipynb); \
+	echo "Convert: $$nb -> $(PY_DIR)/$$name.py"; \
+	uv run jupytext --to py:percent --set-kernel $(KERNEL_NAME) \
+		--set-formats "notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent" \
+		"$$nb" -o "$(PY_DIR)/$$name.py"
 
 sync-py-and-ipynb: ## py_files und ipynb_files bidirektional synchronisieren
 	@for f in "$(PY_DIR)"/*.py; do \
