@@ -8,11 +8,11 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: py-uv_keras-xai (uv)
+#     display_name: py-uv_keras_xai (uv)
 #     language: python
-#     name: py-uv_keras-xai
+#     name: py-uv_keras_xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
