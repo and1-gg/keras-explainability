@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -405,17 +405,3 @@ with h5py.File(data_path, 'r') as f:
     #dtrain_x = f["X_train"][:]  
     dtest_X = np.reshape(f["X_test"][:]  , (-1, 16, 16, 16, 1))
     dtest_y = f["y_test"][:]
-
-# %%
-dtrain_x
-
-# %%
-dtrain_y.shape
-
-# %%
-draw_x.shape
-
-# %%
-16**3
-
-# %%
