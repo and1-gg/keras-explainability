@@ -4,7 +4,7 @@
 .venv/
 
 # ignore data folder (nur im Repo-Root, sonst wird auch pyment/data/ ignoriert)
-/data/
+#/data/
 
 # trained model checkpoints / runs (large binaries)
 /trainings_runs/
