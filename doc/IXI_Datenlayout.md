@@ -17,7 +17,7 @@ image_folder = os.path.join(ixi_folder, 'cropped')       # Bilder + Labels
 fastsurfer_folder = os.path.join(ixi_folder, 'fastsurfer')  # Segmentierungen
 ```
 
-Alles Weitere hängt an diesen drei Pfaden. Zusätzlich gibt es zwei **hart codierte Pfade außerhalb**
+Alles Weitere hängt an diesen drei Pfaden. Zusätzlich gibt es **hart codierte Pfade außerhalb**
 von `ixi_folder`, siehe Abschnitt 6.
 
 ---
@@ -159,23 +159,21 @@ Fehlt die Datei, wird sie beim ersten Aufruf von GitHub (`estenhl/pyment-public`
 
 ---
 
-## 5. Zusätzliche Datei außerhalb von `ixi_folder`
+## 5. Regionsnamen
 
-Die Zelle zur Benennung der Hirnregionen liest:
+Die Zelle zur Benennung der Hirnregionen baut die Tabelle `fastsurfer_labels` (Spalten `id` und
+`name`) über `load_segmentation_labels()` direkt aus den LUTs im Repo:
 
-```python
-fastsurfer_labels = pd.read_csv('~/data/IXI/fastsurfer_labels.csv')
-```
+* `FastSurferCNN/config/FastSurfer_ColorLUT.tsv` (Spalten `ID`, `LabelName`, `R`, `G`, `B`, `A`)
+* `FastSurferCNN/config/FreeSurferColorLUT.txt` als Ergänzung — die FastSurfer-LUT in diesem Repo
+  enthält nur 79 Einträge und deckt u. a. viele `ctx-rh-*`-Labels des DKT-Modells nicht ab.
 
-Erwartete Spalten: `id` (numerisches Label aus der Segmentierung) und `name` (Regionsname).
-Fallbacks im Notebook: `0.0 → 'Background'`, `2.0 → 'WM'`, sonst wird die Zahl selbst angezeigt.
+Bei doppelten IDs gewinnt die FastSurfer-LUT. Fallbacks im Notebook für IDs, die in keiner der
+beiden Tabellen stehen: `0.0 → 'Background'`, `2.0 → 'WM'`, sonst wird die Zahl selbst angezeigt.
 
-Die Datei lässt sich aus der im Repo mitgelieferten LUT erzeugen:
-`FastSurferCNN/config/FastSurfer_ColorLUT.tsv` (Spalten `ID`, `LabelName`, `R`, `G`, `B`, `A`) —
-also `ID → id`, `LabelName → name`. Alternativ `$FREESURFER_HOME/FreeSurferColorLUT.txt`.
-
-Beachte: Dieser Pfad liegt **nicht** unter `ixi_folder`, sondern unter `~/data/IXI/`. Entweder
-diese Datei dort ablegen oder die Zeile auf `ixi_folder` umstellen.
+Eine externe Datei wird dafür nicht mehr gebraucht. Frühere Versionen lasen hier
+`~/data/IXI/fastsurfer_labels.csv` — ein hart codierter Pfad außerhalb von `ixi_folder`, der auf
+einer frischen Maschine zu einem `FileNotFoundError` führte.
 
 ---
 
@@ -186,7 +184,7 @@ diese Datei dort ablegen oder die Zeile auf `ixi_folder` umstellen.
 | `cropped/images/*.nii.gz` mit Shape 167 × 212 × 160 | vorhanden (563 Dateien) |
 | `cropped/labels.csv` mit `id,age` | vorhanden (588 Subjekte) |
 | `fastsurfer/<id>/mri/aparc.DKTatlas+aseg.deep.mgz` | **fehlt** — Regionen-Zellen liefern sonst leere Ergebnisse |
-| `~/data/IXI/fastsurfer_labels.csv` | **fehlt** — muss aus der LUT erzeugt werden |
+| Regionsnamen aus `FastSurferCNN/config/*LUT*` | liegen im Repo, keine Vorbereitung nötig |
 | `~/.pyment/models/regression_sfcn_reg_2025_weights.h5` | wird bei Bedarf automatisch geladen |
 
 ### Bekannte hart codierte Stellen, die angepasst werden müssen

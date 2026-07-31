@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -47,8 +47,8 @@ if str(repo_root) not in sys.path:
 from pyment.data import NiftiDataset, AsyncNiftiGenerator
 from pyment.data.preprocessors import NiftiPreprocessor
 
-#ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'IXI')
-ixi_folder = os.path.join(os.path.expanduser('~/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
+ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'mri', 'ixi')
+#ixi_folder = os.path.join(os.path.expanduser('~/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
 image_folder = os.path.join(ixi_folder, 'cropped')
 project_folder = os.path.join(os.path.expanduser('~'), 'projects', '')
 dataset = NiftiDataset.from_folder(image_folder, target='age')
@@ -311,7 +311,28 @@ import pandas as pd
 from functools import reduce
 
 
-fastsurfer_labels = pd.read_csv('~/data/IXI/fastsurfer_labels.csv')
+def load_segmentation_labels() -> pd.DataFrame:
+    """Maps the numeric labels of the segmentation to region names.
+
+    Uses the lookup tables shipped with FastSurfer. Its own LUT does not cover
+    every label the DKT model emits, so the FreeSurfer LUT fills the gaps.
+    """
+    config_folder = repo_root / 'FastSurferCNN' / 'config'
+
+    fastsurfer = pd.read_csv(config_folder / 'FastSurfer_ColorLUT.tsv', sep='\t',
+                             usecols=['ID', 'LabelName'])
+    fastsurfer = fastsurfer.rename(columns={'ID': 'id', 'LabelName': 'name'})
+
+    freesurfer = pd.read_csv(config_folder / 'FreeSurferColorLUT.txt', sep=r'\s+',
+                             comment='#', header=None, usecols=[0, 1],
+                             names=['id', 'name'])
+
+    labels = pd.concat([fastsurfer, freesurfer])
+
+    return labels.drop_duplicates(subset='id', keep='first').reset_index(drop=True)
+
+
+fastsurfer_labels = load_segmentation_labels()
 
 ids = dataset.ids
 ages = dataset.y
