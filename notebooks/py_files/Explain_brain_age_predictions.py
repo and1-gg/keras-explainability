@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -43,14 +43,12 @@ repo_root = find_repo_root()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-#sys.path.append('/home/esten/repos/FastSurfer/FastSurferCNN')
-
 # %%
 from pyment.data import NiftiDataset, AsyncNiftiGenerator
 from pyment.data.preprocessors import NiftiPreprocessor
 
 #ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'IXI')
-ixi_folder = os.path.join(os.path.expanduser('/home/and1/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
+ixi_folder = os.path.join(os.path.expanduser('~/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
 image_folder = os.path.join(ixi_folder, 'cropped')
 project_folder = os.path.join(os.path.expanduser('~'), 'projects', '')
 dataset = NiftiDataset.from_folder(image_folder, target='age')
@@ -155,13 +153,11 @@ for X, y in generator:
     plt.show()
 
 # %%
-m1 = Model(lrp.input, lrp.layers[56].output)
-m2 = Model(lrp.input, lrp.layers[57].output)
-m3 = Model(lrp.input, lrp.layers[57].input)
+m3 = Model(lrp.input, lrp.layers[56].input)
 
 a, R = m3.predict(X[:1])
 a = a[0]
-R2 = R2[0]
+R = R[0]
 
 print(len(np.where(a.flatten() <= 0)[0]))
 print(len(np.where(R.flatten() == 0)[0]))
@@ -240,7 +236,7 @@ import nibabel as nib
 from collections import Counter
 from copy import copy
 
-from data_loader.conform import conform
+from FastSurferCNN.data_loader.conform import conform
 
 
 fastsurfer_folder = os.path.join(ixi_folder, 'fastsurfer')
