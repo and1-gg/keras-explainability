@@ -17,8 +17,9 @@ image_folder = os.path.join(ixi_folder, 'cropped')       # Bilder + Labels
 fastsurfer_folder = os.path.join(ixi_folder, 'fastsurfer')  # Segmentierungen
 ```
 
-Alles Weitere hängt an diesen drei Pfaden. Zusätzlich gibt es **hart codierte Pfade außerhalb**
-von `ixi_folder`, siehe Abschnitt 6.
+Alles Weitere hängt an diesen drei Pfaden. Erzeugte Abbildungen (`demo.gif`,
+`sorted_correlations.png`) landen unter `output/notebooks/Explain_brain_age_predictions/` im Repo;
+das Verzeichnis wird in der ersten Zelle als `target_dir` angelegt.
 
 ---
 
@@ -189,12 +190,6 @@ einer frischen Maschine zu einem `FileNotFoundError` führte.
 
 ### Bekannte hart codierte Stellen, die angepasst werden müssen
 
-* `sorted_bitmaps[0].save('/home/esten/demo.gif', ...)` — fremder Home-Pfad.
-* `plt.savefig('/home/esten/sorted_correlations.png')` — fremder Home-Pfad.
-* `ImageFont.truetype('arial.ttf', 20)` — unter Linux meist nicht vorhanden, z. B.
-  `DejaVuSans.ttf` verwenden.
-* `np.arange(0, 600, 100)` in den Achsen-Ticks der Korrelations-Heatmap setzt ≥ 600 Subjekte
-  voraus.
 * `all_explanations[i*4 + j]` setzt `batch_size=4` voraus; bei anderer Batch-Größe anpassen.
 * IDs im Stil `IXI237-Guys-1049-T1` bzw. `IXI012-HH-1211-T1` sind in zwei Zellen fest
   eingetragen (Ausschluss eines Ausreißers, Einzelsubjekt-Auswertung). Die aktuelle

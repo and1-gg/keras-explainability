@@ -43,6 +43,11 @@ repo_root = find_repo_root()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+target_dir = repo_root / 'output' / 'notebooks' / 'Explain_brain_age_predictions'
+target_dir.mkdir(parents=True, exist_ok=True)
+
+print(f'Zielordner ist: {target_dir}')
+
 # %%
 from pyment.data import NiftiDataset, AsyncNiftiGenerator
 from pyment.data.preprocessors import NiftiPreprocessor
@@ -184,6 +189,11 @@ for i, (X, y) in tqdm(enumerate(generator), total=generator.batches):
         expl = expl * mask
         all_explanations[i*4 + j] = expl
         images.append(image)
+
+# Der Generator liefert y je Sample als Array der Form (1,). Flach gemacht sind die
+# Labels sortierbar (np.argsort würde sonst über die Achse der Länge 1 sortieren) und
+# lassen sich direkt formatieren.
+labels = np.asarray(labels).reshape(-1)
 
 # %%
 mean_explanation = np.mean(all_explanations, axis=0)
@@ -372,12 +382,19 @@ for key in regions:
     plt.show()
 
 # %%
+import matplotlib
 import matplotlib.pyplot as plt
 
 from matplotlib import cm
 from PIL import Image, ImageDraw, ImageFont
 from typing import Tuple
 
+
+def load_font(size: int = 20):
+    """DejaVuSans wird von matplotlib mitgeliefert, ist also überall vorhanden."""
+    path = Path(matplotlib.get_data_path()) / 'fonts' / 'ttf' / 'DejaVuSans.ttf'
+
+    return ImageFont.truetype(path, size)
 
 def pad_to_size(image, size: int = 212, value: Tuple = 0):
     vertical = size - image.shape[0]
@@ -403,7 +420,7 @@ def concat_vertical(i1, i2):
     return dst
 
 idx = np.argsort([pred[0] for pred in predictions])
-sorted_labels = [labels[i] for i in idx]
+sorted_labels = np.asarray(labels).reshape(-1)[idx]
 sorted_predictions = [predictions[i] for i in idx]
 sorted_images = [images[i] for i in idx]
 sorted_explanations = [all_explanations[i] for i in idx]
@@ -449,13 +466,13 @@ for i in tqdm(range(len(images))):
     bitmap = concat_vertical(brain_bitmap, explanations_bitmap)
     
     draw = ImageDraw.Draw(bitmap)
-    font = ImageFont.truetype('arial.ttf', 20)
+    font = load_font(20)
     draw.text((180, 180),f'Age={sorted_labels[i]:.2f}, brain age {sorted_predictions[i][0]:.2f}', 
               (255,255,255), font=font)
     
     sorted_bitmaps.append(bitmap)
     
-sorted_bitmaps[0].save('/home/esten/demo.gif',
+sorted_bitmaps[0].save(target_dir / 'demo.gif',
                save_all=True, append_images=sorted_bitmaps[1:], optimize=False, duration=40, loop=0)
 
 # %%
@@ -481,17 +498,21 @@ for i in tqdm(range(len(all_explanations))):
         )
 
 # %%
-idx = np.argsort(labels)
+ages = np.asarray(labels).reshape(-1)
+idx = np.argsort(ages)
 sorted_correlations = correlations[idx][:,idx]
+
+ticks = np.unique(np.linspace(0, len(idx) - 1, min(len(idx), 6)).astype(int))
+tick_labels = [round(float(ages[idx[i]]), 2) for i in ticks]
 
 fig = plt.figure(figsize=(15, 15))
 heatmap = plt.imshow(sorted_correlations, cmap='YlGnBu', clim=(0, 1))
 plt.colorbar(heatmap)
-plt.xticks(np.arange(0, 600, 100), [round(labels[idx[i]], 2) for i in np.arange(0, 600, 100)])
+plt.xticks(ticks, tick_labels)
 plt.xlabel('Chronological age')
-plt.yticks(np.arange(0, 600, 100), [round(labels[idx[i]], 2) for i in np.arange(0, 600, 100)])
+plt.yticks(ticks, tick_labels)
 plt.ylabel('Chronological age')
-plt.savefig('/home/esten/sorted_correlations.png')
+plt.savefig(target_dir / 'sorted_correlations.png')
 plt.show()
 
 # %%
