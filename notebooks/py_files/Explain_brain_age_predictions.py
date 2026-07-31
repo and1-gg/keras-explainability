@@ -52,7 +52,7 @@ print(f'Zielordner ist: {target_dir}')
 from pyment.data import NiftiDataset, AsyncNiftiGenerator
 from pyment.data.preprocessors import NiftiPreprocessor
 
-ixi_folder = os.path.join(os.path.expanduser('~'), 'data', 'mri', 'ixi')
+ixi_folder = os.path.join(repo_root, 'data', 'mri', 'ixi')
 #ixi_folder = os.path.join(os.path.expanduser('~/pCloudDrive/media'), 'data', 'neuro-science','IXI', 'for_xai')
 image_folder = os.path.join(ixi_folder, 'cropped')
 project_folder = os.path.join(os.path.expanduser('~'), 'projects', '')
