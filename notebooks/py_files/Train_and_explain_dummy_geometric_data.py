@@ -125,11 +125,21 @@
 # Grafiken, aus `scikit-learn` die Funktion `euclidean_distances` (zum Zeichnen
 # der Kugeln) und `OneHotEncoder` (zur Label-Kodierung).
 #
-# **3. Einen Ausgabeordner anlegen.** `ipynbname.name()` versucht, den Namen des
-# laufenden Notebooks zu ermitteln. Das schlägt fehl, wenn das Notebook
-# nicht-interaktiv über `nbconvert` ausgeführt wird — daher der `try/except` mit
-# einem fest verdrahteten Rückfallwert. Alle Grafiken und das trainierte Modell
-# landen anschließend unter `output/notebooks/<Notebook-Name>/`.
+# **3. Einen Ausgabeordner anlegen.** `find_notebook_name()` ermittelt den Namen
+# des laufenden Notebooks — bewusst ohne fest verdrahteten Namen, damit ein
+# Umbenennen des Notebooks automatisch auch den Ausgabeordner umbenennt. Nötig
+# sind dafür mehrere Quellen, weil keine einzelne in allen Umgebungen
+# funktioniert: `ipynbname.name()` fragt den Jupyter-Server und deckt den
+# interaktiven Fall (JupyterLab, VS Code) ab, scheitert aber unter `nbconvert`,
+# weil dort kein Server läuft. Dann greifen der Reihe nach die
+# Kernel-Umgebungsvariable `JPY_SESSION_NAME`, `__file__` (falls die
+# `.py`-Fassung direkt als Skript läuft) und schließlich die Kommandozeile des
+# aufrufenden Prozesses, in der `nbconvert` bzw. Quarto den Notebook-Pfad
+# stehen hat. Findet keine Quelle etwas, bricht die Zelle mit einer
+# Fehlermeldung ab, statt stillschweigend in einen falschen Ordner zu
+# schreiben; mit der Umgebungsvariablen `NOTEBOOK_NAME` kann man den Namen im
+# Notfall vorgeben. Alle Grafiken und das trainierte Modell landen anschließend
+# unter `output/notebooks/<Notebook-Name>/`.
 #
 # **4. Die Zufallssaat setzen.** `np.random.seed(42)` ist der wichtigste Aufruf
 # dieser Zelle. Der Datensatz wird gleich zufällig generiert; ohne feste Saat
@@ -146,6 +156,7 @@
 # > `tf.keras.utils.set_random_seed()` und `tf.config.experimental.enable_op_determinism()`.
 
 # %%
+import os
 import sys
 from pathlib import Path
 
@@ -171,12 +182,62 @@ from typing import Tuple
 
 import ipynbname
 
-# 2. Notebook-Namen holen
-# Unter nbconvert scheitert ipynbname oft (IndexError am Kernel-Connection-File)
-try:
-    notebook_name = ipynbname.name()
-except Exception:
-    notebook_name = "Train_and_explain_dummy_geometric_data"
+
+def _process_ancestors(pid: int, levels: int = 5) -> list[int]:
+    pids = []
+    for _ in range(levels):
+        pids.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            # Feld 4 von stat ist die PPID; der Prozessname in Feld 2 kann
+            # Leerzeichen enthalten, deshalb erst hinter ")" trennen
+            pid = int(stat[stat.rindex(")") + 1:].split()[1])
+        except Exception:
+            break
+        if pid <= 1:
+            break
+    return pids
+
+
+def find_notebook_name() -> str:
+    """Ermittelt den Namen des laufenden Notebooks ohne .ipynb-Endung."""
+    # 1. Interaktiv (JupyterLab, VS Code): ipynbname fragt den Jupyter-Server
+    #    bzw. liest __vsc_ipynb_file__
+    try:
+        return ipynbname.name()
+    except Exception:
+        pass
+
+    # 2. jupyter-server >= 2 stellt den Notebook-Pfad in die Kernel-Umgebung,
+    #    papermill & Co. setzen __session__
+    for candidate in (os.environ.get("JPY_SESSION_NAME"), globals().get("__session__")):
+        if candidate and candidate.endswith(".ipynb"):
+            return Path(candidate).stem
+
+    # 3. Als reines Skript ausgeführt (python notebooks/py_files/<name>.py)
+    if "__file__" in globals():
+        return Path(globals()["__file__"]).stem
+
+    # 4. Unter nbconvert/quarto gibt es keine der obigen Quellen — dort steht der
+    #    Notebook-Pfad aber in der Kommandozeile des aufrufenden Prozesses
+    #    (JPY_PARENT_PID zeigt auf nbconvert, dessen Vorfahren auf make/quarto)
+    start_pid = int(os.environ.get("JPY_PARENT_PID") or os.getppid())
+    for pid in _process_ancestors(start_pid):
+        try:
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().decode().split("\0")
+        except Exception:
+            continue
+        for arg in args:
+            if arg.endswith(".ipynb"):
+                return Path(arg).stem
+
+    raise RuntimeError(
+        "Notebook-Name konnte nicht ermittelt werden — bitte NOTEBOOK_NAME setzen."
+    )
+
+
+# 2. Notebook-Namen aus der Laufzeitumgebung ermitteln
+notebook_name = os.environ.get("NOTEBOOK_NAME") or find_notebook_name()
 
 # 3. Pfad zusammensetzen: (root-dir-des-repos) / output/notebooks / notebook_name
 target_dir = repo_root / "output/notebooks" / notebook_name
@@ -184,6 +245,7 @@ target_dir = repo_root / "output/notebooks" / notebook_name
 # 4. Ordner erstellen
 target_dir.mkdir(parents=True, exist_ok=True)
 
+print(f"Notebook-Name ist: {notebook_name}")
 print(f"Zielordner ist: {target_dir}")
 
 # für wiederholung
@@ -564,8 +626,8 @@ test_y = y[:300]
 #   als der Verlust ist sie direkt interpretierbar, aber nicht differenzierbar und
 #   deshalb nicht als Optimierungsziel geeignet.
 #
-# Der `if`-Block darunter implementiert **Caching**: Existiert bereits eine
-# gespeicherte Modelldatei unter `output/notebooks/.../100_epochs/`, wird sie
+# Der `if`-Block darunter implementiert **Caching**: Liegt unter
+# `output/notebooks/.../100_epochs/` bereits eine `.keras`-Datei, wird sie
 # geladen; andernfalls wird 100 Epochen lang trainiert und das Ergebnis
 # gespeichert. Eine *Epoche* ist ein vollständiger Durchgang durch die
 # Trainingsdaten; bei `batch_size=32` und 300 Beispielen sind das 10
@@ -617,7 +679,8 @@ model = Model(input, x)
 
 model.compile(loss='categorical_crossentropy', optimizer=Adam(1e-4), metrics=['accuracy'])
 
-existing_model_path = MODEL_PATH if MODEL_PATH.exists() else next(MODEL_DIR.glob("*.model"), None)
+existing_model_path = next(iter(sorted(MODEL_DIR.glob("*.keras"))), None)
+
 if existing_model_path is not None:
     model = load_model(existing_model_path)
     print(f"Model geladen von: {existing_model_path}")
@@ -633,17 +696,14 @@ else:
     model.save(MODEL_PATH)
     print(f"Model gespeichert unter: {MODEL_PATH}")
 
-model = load_model(MODEL_PATH)
-print(f"Model geladen von: {MODEL_PATH}")
-
 # %% [markdown]
 # <a id="kapitel-3-1"></a>
 # ## 3.1 Interpretation: Was beim Training passiert ist
 #
 # [↑ Inhaltsverzeichnis](#toc)
 #
-# Die Ausgabe dieser Zelle enthält keinen Trainingsverlauf, sondern nur zwei
-# Meldungen der Form `Model geladen von: .../geometric_3d_cnn.keras`. Das ist die
+# Die Ausgabe dieser Zelle enthält keinen Trainingsverlauf, sondern nur die
+# Meldung `Model geladen von: .../geometric_3d_cnn.keras`. Das ist die
 # erwartete Ausgabe **beim zweiten und jedem weiteren Lauf**: Das Modell wurde
 # bereits einmal trainiert und liegt als Datei vor, der `else`-Zweig mit
 # `model.fit(...)` wird übersprungen.

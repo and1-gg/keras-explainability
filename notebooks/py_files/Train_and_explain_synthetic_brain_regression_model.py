@@ -124,6 +124,32 @@
 #
 # [↑ Inhaltsverzeichnis](#toc)
 #
+# ### Zuerst: die technische Vorbereitung
+#
+# Der obere Teil der Zelle hat noch nichts mit Daten zu tun, sondern richtet die
+# Umgebung ein. Drei Dinge passieren dort:
+#
+# 1. **`find_repo_root()`** sucht vom aktuellen Arbeitsverzeichnis aus nach oben,
+#    bis eine `pyproject.toml` oder ein `explainability`-Ordner auftaucht, und legt
+#    diesen Pfad in `sys.path`. Das ist der Grund, warum `from explainability import
+#    LRP` funktioniert, egal aus welchem Verzeichnis das Notebook gestartet wurde.
+# 2. **`find_notebook_name()`** ermittelt den Namen des laufenden Notebooks. Das ist
+#    überraschend fummelig, weil Jupyter diese Information nicht standardisiert
+#    bereitstellt: Die Funktion probiert der Reihe nach `ipynbname`, dann
+#    Umgebungsvariablen (`JPY_SESSION_NAME`, `__session__`), dann `__file__` (falls
+#    als Skript ausgeführt) und schließlich die Kommandozeilen der Elternprozesse
+#    über `/proc` (für `nbconvert`/`quarto`). Wer den Automatismus umgehen will,
+#    setzt die Umgebungsvariable `NOTEBOOK_NAME`.
+# 3. **`target_dir`** wird daraus gebaut: `output/notebooks/<notebook-name>`. Dort
+#    landen später die trainierten Modelle (siehe Abschnitt 8). So schreibt jedes
+#    Notebook in seinen eigenen Ausgabeordner und Ergebnisse verschiedener
+#    Experimente vermischen sich nicht.
+#
+# `np.random.seed(42)` fixiert den Zufallsgenerator. Damit ist der ganze Datensatz
+# **reproduzierbar** — bei jedem Ausführen entstehen dieselben Gehirne. Für
+# Experimente ist das unverzichtbar, weil man sonst nicht unterscheiden kann, ob ein
+# Unterschied vom geänderten Code oder vom Zufall kommt.
+#
 # ### Was passiert in dieser Zelle?
 #
 # Die Zelle erzeugt den kompletten Datensatz: `N = 1000` Volumen der Größe
