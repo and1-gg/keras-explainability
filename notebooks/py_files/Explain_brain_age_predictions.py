@@ -269,7 +269,7 @@ generator = AsyncNiftiGenerator(
 #
 # `RegressionSFCN(weights='brain-age')` lädt das **Simple Fully Convolutional Network** von
 # Peng et al. (2021) mit vortrainierten Brain-Age-Gewichten. Die Gewichtsdatei
-# (`regression_sfcn_reg_2025_weights.h5`) wird beim ersten Aufruf nach `~/.pyment/models/`
+# (`regression_sfcn_reg_2025_weights.h5`) wird beim ersten Aufruf nach `output/pyment/models/`
 # heruntergeladen. `model.predict(generator)` schickt anschließend alle Batches durch das Netz.
 #
 # ### Die Architektur
