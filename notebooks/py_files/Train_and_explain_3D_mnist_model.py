@@ -10,9 +10,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: Python 3 (ipykernel)
+#     display_name: py-uv_keras-xai (uv)
 #     language: python
-#     name: python3
+#     name: py-uv_keras-xai
 #   language_info:
 #     codemirror_mode:
 #       name: ipython
@@ -136,7 +136,7 @@
 # | 2 | [Das 3D-CNN: Architektur](#sec-02) | `Conv3D`, BatchNorm, Pooling, 3,5 Mio. Parameter |
 # | 3 | [Exkurs: Farbskalen richtig lesen](#sec-03) | warum `jet` für Heatmaps ungeeignet ist |
 # | 4 | [Training: Verlust, Optimierer, Callbacks](#sec-04) | Cross-Entropy, Adam, `ReduceLROnPlateau` |
-# | 5 | [Das trainierte Modell laden](#sec-05) | `.keras`-Format, Trennung Training / Analyse |
+# | 5 | [Das Modell: laden oder trainieren](#sec-05) | `.keras`-Format, Trennung Training / Analyse |
 # | 6 | [LRP: zehn Erklärungen für ein Volumen](#sec-06) | Regelstrategie, Relevanzsummen vs. Logits |
 # | 7 | [Die Slice-Galerie: 10 Klassen × 16 Schichten](#sec-07) | die zentrale Abbildung, Rot/Blau lesen |
 # | 8 | [Die Differenzmatrix](#sec-08) | wie klassenspezifisch sind die Erklärungen wirklich? |
@@ -263,7 +263,71 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
-data_path = os.path.join(os.path.expanduser('~/git-repos/keras-explainability'), 'data', '3d-mnist', 'full_dataset_vectors.h5')
+import ipynbname
+
+
+def _process_ancestors(pid: int, levels: int = 5) -> list[int]:
+    pids = []
+    for _ in range(levels):
+        pids.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            # Feld 4 von stat ist die PPID; der Prozessname in Feld 2 kann
+            # Leerzeichen enthalten, deshalb erst hinter ")" trennen
+            pid = int(stat[stat.rindex(")") + 1:].split()[1])
+        except Exception:
+            break
+        if pid <= 1:
+            break
+    return pids
+
+
+def find_notebook_name() -> str:
+    """Ermittelt den Namen des laufenden Notebooks ohne .ipynb-Endung."""
+    # 1. Interaktiv (JupyterLab, VS Code): ipynbname fragt den Jupyter-Server
+    #    bzw. liest __vsc_ipynb_file__
+    try:
+        return ipynbname.name()
+    except Exception:
+        pass
+
+    # 2. jupyter-server >= 2 stellt den Notebook-Pfad in die Kernel-Umgebung,
+    #    papermill & Co. setzen __session__
+    for candidate in (os.environ.get("JPY_SESSION_NAME"), globals().get("__session__")):
+        if candidate and candidate.endswith(".ipynb"):
+            return Path(candidate).stem
+
+    # 3. Als reines Skript ausgeführt (python notebooks/py_files/<name>.py)
+    if "__file__" in globals():
+        return Path(globals()["__file__"]).stem
+
+    # 4. Unter nbconvert/quarto gibt es keine der obigen Quellen — dort steht der
+    #    Notebook-Pfad aber in der Kommandozeile des aufrufenden Prozesses
+    #    (JPY_PARENT_PID zeigt auf nbconvert, dessen Vorfahren auf make/quarto)
+    start_pid = int(os.environ.get("JPY_PARENT_PID") or os.getppid())
+    for pid in _process_ancestors(start_pid):
+        try:
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().decode().split("\0")
+        except Exception:
+            continue
+        for arg in args:
+            if arg.endswith(".ipynb"):
+                return Path(arg).stem
+
+    raise RuntimeError(
+        "Notebook-Name konnte nicht ermittelt werden — bitte NOTEBOOK_NAME setzen."
+    )
+
+
+notebook_name = os.environ.get("NOTEBOOK_NAME") or find_notebook_name()
+
+target_dir = repo_root / "output" / "notebooks" / notebook_name
+target_dir.mkdir(parents=True, exist_ok=True)
+
+print(f"Notebook-Name ist: {notebook_name}")
+print(f"Zielordner ist: {target_dir}")
+
+data_path = repo_root / 'data' / '3d-mnist' / 'full_dataset_vectors.h5'
 
 assert os.path.isfile(data_path), \
     'Download the 3d-mnist data from https://www.kaggle.com/daavoo/3d-mnist'
@@ -594,18 +658,17 @@ plt.show()
 # wäre `val_loss`: Sinkt nur der Trainingsverlust weiter, während der Validierungsverlust steigt,
 # lernt das Netz auswendig — das würde dieser Callback nicht bemerken.
 #
-# ### Warum ist `model.fit` auskommentiert?
+# ### Wo bleibt `model.fit`?
 #
-# Der Trainingsaufruf steht in einem **String-Literal** (`"""…"""`), wird also nicht ausgeführt. Die
-# Zellenausgabe ist genau dieser String — das ist kein Fehler, sondern Jupyter, das den Wert des
-# letzten Ausdrucks anzeigt.
+# Diese Zelle **bereitet das Training nur vor**. Der eigentliche Aufruf steht in Abschnitt 5, denn
+# erst dort wird entschieden, ob überhaupt trainiert werden muss: Liegt schon ein gespeichertes
+# Modell vor, wird es geladen und `model.fit` übersprungen.
 #
-# Der Grund: 100 Epochen dauern auf einer Laptop-GPU einige Minuten, und das Ergebnis liegt bereits
-# gespeichert vor (Abschnitt 5). Dieses Notebook ist ein **Analyse**-Notebook; man soll es von oben
-# bis unten durchlaufen lassen können, ohne jedes Mal neu zu trainieren. Wer selbst trainieren will,
-# entfernt die drei Anführungszeichen.
+# Der Grund für diese Trennung: 100 Epochen dauern auf einer Laptop-GPU einige Minuten. Dieses
+# Notebook ist in erster Linie ein **Analyse**-Notebook; man soll es von oben bis unten durchlaufen
+# lassen können, ohne jedes Mal neu zu trainieren.
 #
-# Die geplanten Einstellungen:
+# Die Einstellungen, mit denen Abschnitt 5 im Trainingsfall arbeitet:
 #
 # | Parameter | Wert | Bedeutung |
 # |---|---|---|
@@ -619,7 +682,7 @@ plt.show()
 # Die strikte Trennung „Training einmal, Analyse beliebig oft" ist bei 3D-Daten keine Bequemlichkeit,
 # sondern Notwendigkeit: Beim MRT-Pendant dieses Notebooks dauert ein Trainingslauf Stunden bis Tage
 # auf dedizierter Hardware. Das Modell ist dort ein **Artefakt**, das man versioniert, ablegt und
-# wiederverwendet — genau wie hier in `trainings_runs/`.
+# wiederverwendet — genau wie hier in `output/notebooks/<Notebook-Name>/`.
 
 # %%
 from tensorflow.keras.callbacks import ReduceLROnPlateau
@@ -637,38 +700,39 @@ callbacks = [
     )
 ]
 
-"""
-model.fit(train_X, train_y, 
-          validation_data=(test_X, test_y), 
-          #epochs=2, 
-          epochs=100, 
-          batch_size=32, 
-          shuffle=True,
-          callbacks=callbacks)
-"""
-
 # %% [markdown]
 # <a id="sec-05"></a>
-# ## 5. Das trainierte Modell laden
+# ## 5. Das Modell: laden oder trainieren
 #
 # [↑ Inhaltsverzeichnis](#toc)
 #
 # ### Was passiert hier?
 #
-# `load_model(MODEL_PATH)` **überschreibt** die Variable `model`. Das in Abschnitt 2 gebaute Netz mit
-# seinen Zufallsgewichten wird also verworfen und durch das über 100 Epochen trainierte ersetzt.
-# Architektur, Gewichte, Optimierer-Zustand und Trainingskonfiguration stecken alle in der einen
-# Datei `3d_mnist_cnn.keras`.
+# Die Zelle sucht mit `MODEL_DIR.glob("*.keras")` nach einem bereits gespeicherten Modell und
+# verzweigt danach:
 #
-# Die beiden auskommentierten Zeilen (`model.save(...)`) sind die Gegenrichtung: Wer selbst
-# trainiert, aktiviert sie und kommentiert stattdessen `load_model` aus. `MODEL_DIR.mkdir(parents=True,
-# exist_ok=True)` legt den Ordner an, falls er fehlt, und beschwert sich nicht, wenn er schon
-# existiert.
+# * **Datei gefunden** → `load_model(...)` **überschreibt** die Variable `model`. Das in Abschnitt 2
+#   gebaute Netz mit seinen Zufallsgewichten wird verworfen und durch das trainierte ersetzt. Es
+#   wird *nicht* trainiert.
+# * **Keine Datei** → es wird 100 Epochen lang trainiert und das Ergebnis mit `model.save(...)`
+#   abgelegt. Beim nächsten Durchlauf greift dann der obere Zweig.
+#
+# Architektur, Gewichte, Optimierer-Zustand und Trainingskonfiguration stecken alle in der einen
+# Datei `3d_mnist_cnn.keras`. `MODEL_DIR.mkdir(parents=True, exist_ok=True)` legt den Ordner an,
+# falls er fehlt, und beschwert sich nicht, wenn er schon existiert.
+#
+# Dieses **Caching-Muster** verwenden alle Trainings-Notebooks dieses Repos. Das Modell landet unter
+# `output/notebooks/<Notebook-Name>/100_epochs/` — also im selben Ausgabeordner wie die Grafiken,
+# jedes Notebook in seinem eigenen. Wer bewusst neu trainieren will, löscht oder verschiebt die
+# `.keras`-Datei.
+#
+# ⚠️ Die Suche per `glob` nimmt die **erste** `.keras`-Datei in alphabetischer Reihenfolge — liegen
+# dort mehrere Modelle, wird nicht unbedingt das geladen, das `MODEL_PATH` benennt.
 #
 # ### Ausgabe
 #
 # ```text
-# Model geladen von: …/trainings_runs/3d_mnist/100_epochs/3d_mnist_cnn.keras
+# Model geladen von: …/output/notebooks/Train_and_explain_3D_mnist_model/100_epochs/3d_mnist_cnn.keras
 # ```
 #
 # ### Warum `.keras` und nicht `.h5`?
@@ -699,15 +763,26 @@ model.fit(train_X, train_y,
 # %%
 from tensorflow.keras.models import load_model
 
-MODEL_DIR = repo_root / "trainings_runs" / "3d_mnist" / "100_epochs"
+MODEL_DIR = target_dir / "100_epochs"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODEL_DIR / "3d_mnist_cnn.keras"
 
-#model.save(MODEL_PATH)
-#print(f"Model gespeichert unter: {MODEL_PATH}")
+existing_model_path = next(iter(sorted(MODEL_DIR.glob("*.keras"))), None)
 
-model = load_model(MODEL_PATH)
-print(f"Model geladen von: {MODEL_PATH}")
+if existing_model_path is not None:
+    model = load_model(existing_model_path)
+    print(f"Model geladen von: {existing_model_path}")
+else:
+    model.fit(train_X, train_y,
+              validation_data=(test_X, test_y),
+              #epochs=2,
+              epochs=100,
+              batch_size=32,
+              shuffle=True,
+              callbacks=callbacks)
+
+    model.save(MODEL_PATH)
+    print(f"Model gespeichert unter: {MODEL_PATH}")
 
 # %% [markdown]
 # <a id="sec-06"></a>
@@ -1054,7 +1129,7 @@ for i in range(num_explanations):
 plt.tight_layout()
 
 # 3. Als eine einzige, große Datei speichern
-fig.savefig(MODEL_DIR / "all_slices_combined.png", bbox_inches='tight', dpi=150)
+fig.savefig(target_dir / "all_slices_combined.png", bbox_inches='tight', dpi=150)
 
 # 4. Am Ende einmal anzeigen und Speicher freigeben
 plt.show()
