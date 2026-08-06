@@ -152,7 +152,7 @@ derselben gecroppten Datei stammen.
 `RegressionSFCN(weights='brain-age')` lädt keine lokale Datei aus dem Datenordner, sondern:
 
 ```
-~/.pyment/models/regression_sfcn_reg_2025_weights.h5
+output/pyment/models/regression_sfcn_reg_2025_weights.h5
 ```
 
 Fehlt die Datei, wird sie beim ersten Aufruf von GitHub (`estenhl/pyment-public`) heruntergeladen.
@@ -186,7 +186,7 @@ einer frischen Maschine zu einem `FileNotFoundError` führte.
 | `cropped/labels.csv` mit `id,age` | vorhanden (588 Subjekte) |
 | `fastsurfer/<id>/mri/aparc.DKTatlas+aseg.deep.mgz` | **fehlt** — Regionen-Zellen liefern sonst leere Ergebnisse |
 | Regionsnamen aus `FastSurferCNN/config/*LUT*` | liegen im Repo, keine Vorbereitung nötig |
-| `~/.pyment/models/regression_sfcn_reg_2025_weights.h5` | wird bei Bedarf automatisch geladen |
+| `output/pyment/models/regression_sfcn_reg_2025_weights.h5` | wird bei Bedarf automatisch geladen |
 
 ### Bekannte hart codierte Stellen, die angepasst werden müssen
 

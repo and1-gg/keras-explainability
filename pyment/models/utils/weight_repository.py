@@ -25,8 +25,13 @@ _mapping = {
 }
 
 
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', '..', '..')
+)
+
+
 class WeightRepository:
-    root = os.path.join(os.path.expanduser('~'), '.pyment', 'models')
+    root = os.path.join(_REPO_ROOT, 'output', 'pyment', 'models')
 
     @staticmethod
     def get_path(model: str, weights: str, include_top: bool):
