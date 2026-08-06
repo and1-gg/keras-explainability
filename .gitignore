@@ -16,4 +16,4 @@
 .ipynb_checkpoints/
 *-checkpoint.py
 #notebooks/html_files/
-output/notebooks/
+#output/notebooks/
