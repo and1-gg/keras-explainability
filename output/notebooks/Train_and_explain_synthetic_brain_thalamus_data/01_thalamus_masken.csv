@@ -1,0 +1,11 @@
+id,thal_voxel,hirn_voxel,anteil_%,ausserhalb,schwerpunkt_links,schwerpunkt_rechts
+sub-017,17572,1840926,0.95,0,"(np.int64(99), np.int64(116), np.int64(101))","(np.int64(77), np.int64(116), np.int64(103))"
+sub-036,18604,1794562,1.04,0,"(np.int64(96), np.int64(116), np.int64(102))","(np.int64(74), np.int64(117), np.int64(102))"
+sub-083,19508,1887909,1.03,0,"(np.int64(93), np.int64(132), np.int64(100))","(np.int64(72), np.int64(133), np.int64(101))"
+sub-191,14666,1686993,0.87,0,"(np.int64(89), np.int64(122), np.int64(98))","(np.int64(68), np.int64(119), np.int64(96))"
+sub-267,16366,1887219,0.87,0,"(np.int64(95), np.int64(130), np.int64(97))","(np.int64(71), np.int64(131), np.int64(94))"
+sub-395,17374,1739103,1.0,0,"(np.int64(95), np.int64(158), np.int64(108))","(np.int64(73), np.int64(160), np.int64(109))"
+sub-532,17734,1809888,0.98,0,"(np.int64(98), np.int64(155), np.int64(86))","(np.int64(74), np.int64(154), np.int64(87))"
+sub-554,14177,1584642,0.89,0,"(np.int64(89), np.int64(114), np.int64(111))","(np.int64(61), np.int64(114), np.int64(110))"
+sub-621,17076,1510793,1.13,0,"(np.int64(85), np.int64(117), np.int64(100))","(np.int64(64), np.int64(119), np.int64(100))"
+sub-638,16102,2041171,0.79,0,"(np.int64(96), np.int64(135), np.int64(91))","(np.int64(69), np.int64(134), np.int64(91))"
