@@ -11,12 +11,53 @@ dokumentiert in `test_lrp_integration.py::test_lrp_include_prediction_flag`)
 
 ---
 
+## Umgebungen und TensorFlow-Versionen
+
+Dieses Repo unterstützt zwei TensorFlow-Versionen, die über **pixi** als
+getrennte Environments verwaltet werden. Eine dritte Umgebung läuft über **uv**.
+
+| Tool | Environment | TF-Version | Keras | Zweck |
+|---|---|---|---|---|
+| pixi | `default` | 2.17 | 3 | XAI-Code, Notebooks |
+| pixi | `tf215` | 2.15 | 2 | Kompatibilität mit `pyment-public` |
+| uv | `.venv` | 2.18 | 3 | Entwicklung, pytest |
+
+### Hintergrund: Warum zwei TF-Versionen?
+
+Das Projekt lädt vortrainierte Gehirn-Alters-Modelle aus dem externen Paket
+[pyment-public](https://github.com/estenhl/pyment-public). Diese Modelle wurden
+mit **TF 2.15 / Keras 2** gespeichert (`.keras`-Format). Ab TF 2.16 verwendet
+Keras das neue Keras-3-Format – die alten Modelldateien lassen sich damit
+**nicht mehr laden**. Die `tf215`-Umgebung stellt sicher, dass diese Modelle
+weiterhin genutzt werden können, ohne den gesamten XAI-Code auf Keras 2
+zurückzuportieren.
+
+TF 2.15 und TF 2.17/2.18 sind inkompatibel und können nicht im selben
+Environment aufgelöst werden. Pixi löst das über `solve-group` und
+`no-default-feature = true`, sodass beide Environments vollständig getrennt
+aufgelöst werden.
+
+### TF-Version prüfen
+
+```bash
+# pixi – Standard-Umgebung (TF 2.17 / Keras 3, für XAI und Notebooks)
+pixi run python -c "import tensorflow as tf; print(tf.__version__)"
+
+# pixi – tf215-Umgebung (TF 2.15 / Keras 2, für pyment-public-Modelle)
+pixi run -e tf215 python -c "import tensorflow as tf; print(tf.__version__)"
+
+# uv – Haupt-venv (TF 2.18 / Keras 3, für Entwicklung und pytest)
+uv run python -c "import tensorflow as tf; print(tf.__version__)"
+```
+
+---
+
 ## Tests ausführen
 
 ### Voraussetzung
 
-Die Tests laufen in der `uv`-verwalteten virtuellen Umgebung unter `.venv/`.
-Python und alle Abhängigkeiten sind damit bereits installiert.
+Die Tests laufen in der `uv`-verwalteten virtuellen Umgebung unter `.venv/`
+(TF 2.18). Python und alle Abhängigkeiten sind damit bereits installiert.
 
 ```bash
 # Im Repo-Root:

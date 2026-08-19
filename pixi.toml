@@ -2,16 +2,17 @@
 name = "keras-explainability"
 version = "0.1.0"
 description = "GPU environment for keras explainability"
-channels = ["conda-forge", "nvidia"]
+channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 # ============================================================
 # Standard-Umgebung: TF 2.17 (Keras 3) – für XAI-Code
 # ============================================================
+# CUDA/cuDNN werden NICHT über Conda installiert – das System-CUDA 13
+# wird genutzt. TF bringt seine eigenen CUDA-Bibliotheken über den
+# PyPI-Extra [and-cuda] mit.
 [dependencies]
 python = "3.10.*"
-cudnn = "8.9.*"
-cuda = "12.3.*"
 pip = "*"
 
 [pypi-dependencies]
@@ -39,8 +40,6 @@ register-ipykernel = { cmd = [
 # ============================================================
 [feature.tf215.dependencies]
 python = "3.10.*"
-cudnn = "8.9.*"
-cuda = "12.2.*"
 pip = "*"
 
 [feature.tf215.pypi-dependencies]
@@ -65,7 +64,7 @@ register-ipykernel-tf215 = { cmd = [
   ]}
 
 [environments]
-default = { features = [], solve-group = "default" }
-tf215   = { features = ["tf215"], solve-group = "tf215" }
+default = { features = [], solve-group = "default", no-default-feature = false }
+tf215   = { features = ["tf215"], solve-group = "tf215", no-default-feature = true }
 
 
