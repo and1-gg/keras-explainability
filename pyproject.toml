@@ -33,9 +33,18 @@ dev = [
     "jupytext>=1.16",
 ]
 
+# HINWEIS: Die tf215-Gruppe wurde absichtlich entfernt.
+# TF 2.15 ist mit den Haupt-Dependencies (TF 2.18) inkompatibel – uv kann keine
+# gemeinsame Lösung finden und schlägt bei jedem `uv sync` fehl.
+# Die tf215-Dependencies werden ausschließlich über scripts/setup_tf215_venv.sh
+# in einem separaten .venv-tf215 verwaltet (requirements-tf215.txt).
+
 [tool.uv]
 # Kein eigenes Python-Package, nur eine Umgebung mit Dependencies (Skripte, Notebooks etc.)
 package = false
+# tf215 ist inkompatibel mit den Haupt-Dependencies (TF 2.15 vs. TF 2.18).
+# Wird nur über scripts/setup_tf215_venv.sh in einem separaten .venv-tf215 installiert.
+default-groups = ["dev"]
 
 # Paarung: notebooks/ipynb_files/*.ipynb <-> notebooks/py_files/*.py
 # Achtung: vorhandene Notebook-Metadaten "formats" haben Vorrang vor dieser Config.

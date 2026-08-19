@@ -2,6 +2,7 @@
 
 # uv / local virtualenv
 .venv/
+.venv-tf215/
 
 # ignore data folder (nur im Repo-Root, sonst wird auch pyment/data/ ignoriert)
 #/data/

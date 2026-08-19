@@ -1,0 +1,13 @@
+# Abhängigkeiten für das separate .venv-tf215
+# Kompatibel mit TF 2.15 / Keras 2 (z. B. für model.keras aus pyment-public).
+# Installation: bash scripts/setup_tf215_venv.sh
+tensorflow[and-cuda]==2.15.1
+numpy>=1.26.4,<2
+nibabel>=5.2.1,<6
+pandas>=2.2.1,<3
+tqdm>=4.66,<5
+omegaconf>=2.3,<3
+scipy>=1.13,<2
+matplotlib>=3.8.3,<4
+scikit-learn>=1.4,<2
+ipykernel>=6.29,<8
