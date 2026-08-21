@@ -23,6 +23,7 @@ dependencies = [
     # PyPI-Wheels enthalten unter Linux/Windows GPU-Support (CUDA 13, getrennt von TF-CUDA-12)
     "torch>=2.5",
     # PyPI-Wheel enthält GPU-Support (device='cuda'); nutzt nvidia-nccl-cu12, parallel zu TF/PyTorch
+    "xarray>=2025.6.1",
     "xgboost>=3.2.0",
 ]
 
