@@ -10,9 +10,19 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.16.6
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: py-uv_keras-xai (uv)
 #     language: python
-#     name: python3
+#     name: py-uv_keras-xai
+#   language_info:
+#     codemirror_mode:
+#       name: ipython
+#       version: 3
+#     file_extension: .py
+#     mimetype: text/x-python
+#     name: python
+#     nbconvert_exporter: python
+#     pygments_lexer: ipython3
+#     version: 3.10.8
 # ---
 
 # %% [markdown]
@@ -31,7 +41,7 @@ from pathlib import Path
 
 # Inline-Backend *vor* dem pyplot-Import setzen (sonst bleibt oft Agg aktiv
 # und plt.show() zeigt im Notebook nichts, obwohl savefig die PNG schreibt).
-%matplotlib inline
+# %matplotlib inline
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -58,9 +68,13 @@ DATASETS = {
     "ixi": DATA_ROOT / "ixi",
     "ds003114_OvarianHormones": DATA_ROOT / "ds003114_OvarianHormones",
     "ds004711_AgeRisk": DATA_ROOT / "ds004711_AgeRisk",
+    "ukb": DATA_ROOT / "ukb",
 }
 
-DATASET = "ixi"  # <- hier umschalten
+#DATASET = "ixi"  # <- hier umschalten
+#DATASET = "ukb"  # <- hier umschalten
+#DATASET = "ds004711_AgeRisk"  # <- hier umschalten
+DATASET = "ds003114_OvarianHormones"  # <- hier umschalten
 N_SUBJECTS = 50
 PRED_BATCH_SIZE = 8
 
@@ -292,3 +306,10 @@ fig.savefig(scatter_path, dpi=120)
 print("Scatter:", scatter_path)
 display(fig)  # zuverlässiger als plt.show() unter Agg / in VS Code–Jupyter
 plt.close(fig)
+
+# %%
+1+1
+
+# %%
+
+# %%
