@@ -304,7 +304,11 @@ target_dir = (
     / DATASET
 )
 target_dir.mkdir(parents=True, exist_ok=True)
-print("Heatmaps →", target_dir)
+print("PNG-Vorschau →", target_dir)
+
+heatmaps_dir = RUN_DIR / "heatmaps"
+heatmaps_dir.mkdir(parents=True, exist_ok=True)
+print("NIfTI-Heatmaps →", heatmaps_dir)
 
 NORM_FACTOR = float(cfg.preprocessing.normalization_factor)
 LOADER = str(getattr(cfg.data, "loader", "nifti-nibabel")).lower()
@@ -322,10 +326,10 @@ def load_volume(path: str) -> np.ndarray:
     return vol.astype(np.float32)
 
 
-N_HEATMAPS = 3  # erste N Subjekte aus df visualisieren
-rows = df.head(int(N_HEATMAPS)).reset_index(drop=True)
-print(f"Subjekte für Heatmaps ({DATASET}): {len(rows)}")
-print(rows[["participant_id", "filepath", pred_var]].head())
+N_HEATMAP_PLOTS = 3  # PNG-Vorschau für die ersten N Subjekte
+print(f"Subjekte LRP + NIfTI ({DATASET}): n={len(df)}")
+print(f"PNG-Vorschau: erste {min(N_HEATMAP_PLOTS, len(df))} Subjekte")
+print(df[["participant_id", "filepath", pred_var]].head())
 
 # %%
 # LRP-Erklärer + Heatmap-Visualisierung
@@ -335,6 +339,9 @@ print(rows[["participant_id", "filepath", pred_var]].head())
 #   flat → flat → αβ → αβ → αβ → αβ → ε
 # Maskierung: Relevanz außerhalb des Gehirns (Voxel==0) auf 0 setzen,
 # weil die flat-Regel sonst Hintergrund beleuchtet.
+
+import nibabel as nib
+from tqdm import tqdm
 
 from explainability import LRP, LRPStrategy
 
@@ -357,6 +364,33 @@ lrp = LRP(model, layer=len(model.layers) - 1, idx=0, strategy=strategy)
 print("LRP-Schichten:", len(lrp.layers))
 
 
+def mask_explanation(volume: np.ndarray, explanation: np.ndarray) -> np.ndarray:
+    """Nullt Relevanz außerhalb des Gehirns (wie im Brain-Age-Notebook)."""
+    x = volume.squeeze()
+    expl = explanation.squeeze().astype(np.float32)
+    return expl * (x != 0).astype(np.float32)
+
+
+def save_heatmap_nifti(
+    explanation: np.ndarray,
+    reference_nii_path: str,
+    out_path: Path,
+) -> None:
+    """Speichert LRP-Heatmap im Gitter/Affine des Referenz-cropped.nii.gz."""
+    ref = nib.load(reference_nii_path)
+    data = np.asarray(explanation, dtype=np.float32).squeeze()
+    ref_shape = ref.shape
+    if data.shape != ref_shape:
+        raise ValueError(
+            f"Shape-Mismatch Heatmap {data.shape} vs Referenz {ref_shape} "
+            f"({reference_nii_path})"
+        )
+    header = ref.header.copy()
+    header.set_data_dtype(np.float32)
+    img = nib.Nifti1Image(data, affine=ref.affine, header=header)
+    nib.save(img, str(out_path))
+
+
 def plot_lrp_heatmap(
     volume: np.ndarray,
     explanation: np.ndarray,
@@ -366,9 +400,7 @@ def plot_lrp_heatmap(
 ):
     """Sagittal / koronal / axial: Anatomie + LRP um das relevanteste Voxel."""
     x = volume.squeeze()
-    expl = explanation.squeeze()
-    mask = (x != 0).astype(np.float32)
-    expl = expl * mask
+    expl = mask_explanation(volume, explanation)
     vmax = float(np.amax(np.abs(expl)))
     if vmax > 0:
         expl = expl / vmax
@@ -436,10 +468,11 @@ def plot_lrp_heatmap(
 
 
 # %%
-# Heatmaps für die ersten N_HEATMAPS Subjekte von DATASET (z. B. ds003114).
-# Rot = treibt die Vorhersage nach oben, Blau = nach unten (seismic, normiert).
+# LRP für alle N_SUBJECTS: NIfTI nach RUN_DIR/heatmaps, PNG-Vorschau für erste N.
 
-for _, row in rows.iterrows():
+saved_niftis: list[Path] = []
+
+for i, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="LRP")):
     sid = str(row["participant_id"])
     path = str(row["filepath"])
     y_true = float(row[pred_var])
@@ -448,15 +481,26 @@ for _, row in rows.iterrows():
     X = np.expand_dims(vol, axis=0)
     y_pred = float(np.squeeze(model.predict(X, verbose=0)))
     R = lrp(X)[0].numpy()
+    R_masked = mask_explanation(vol, R)
 
-    print(f"{sid}: true={y_true:.1f}  pred={y_pred:.1f}  sum(R)={float(np.sum(R)):.3f}")
-    plot_lrp_heatmap(
-        vol,
-        R,
-        title=f"{DATASET}  {sid}  true={y_true:.1f}  pred={y_pred:.1f}",
-        save_path=target_dir / f"lrp_heatmap_{sid}.png",
+    nii_path = heatmaps_dir / f"{DATASET}_{sid}.nii.gz"
+    save_heatmap_nifti(R_masked, path, nii_path)
+    saved_niftis.append(nii_path)
+
+    print(
+        f"{sid}: true={y_true:.1f}  pred={y_pred:.1f}  "
+        f"sum(R)={float(np.sum(R_masked)):.3f}  →  {nii_path.name}"
     )
 
-print("Fertig. Heatmaps unter:", target_dir)
+    if i < N_HEATMAP_PLOTS:
+        plot_lrp_heatmap(
+            vol,
+            R,
+            title=f"{DATASET}  {sid}  true={y_true:.1f}  pred={y_pred:.1f}",
+            save_path=target_dir / f"lrp_heatmap_{sid}.png",
+        )
+
+print(f"Fertig. {len(saved_niftis)} NIfTI-Heatmaps unter: {heatmaps_dir}")
+print(f"PNG-Vorschau unter: {target_dir}")
 
 # %%
