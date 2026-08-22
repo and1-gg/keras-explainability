@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -54,7 +54,9 @@ from scipy.stats import pearsonr
 # %% [markdown]
 # ## Konfiguration
 #
-# `DATASET` wählen: `ixi`, `ds003114_OvarianHormones` oder `ds004711_AgeRisk`.
+# `DATASET` wählen: `ixi`, `ukb`, `ds003114_OvarianHormones` oder `ds004711_AgeRisk`.
+# Bei `ukb` werden automatisch Holdout-Subjects aus `predict.tsv` genommen
+# (nicht die Trainings-Subjects aus `subjects_dl_input.tsv`).
 
 # %%
 RUN_DIR = Path(
@@ -72,11 +74,18 @@ DATASETS = {
 }
 
 #DATASET = "ixi"  # <- hier umschalten
-#DATASET = "ukb"  # <- hier umschalten
+#DATASET = "ukb"  # <- hier umschalten (nutzt automatisch Holdout aus predict.tsv)
 #DATASET = "ds004711_AgeRisk"  # <- hier umschalten
 DATASET = "ds003114_OvarianHormones"  # <- hier umschalten
 N_SUBJECTS = 50
 PRED_BATCH_SIZE = 8
+
+# Nur für UKB: Holdout-Subjects aus dem offiziellen predict-Split (nicht train.tsv).
+# Die ersten N_SUBJECTS Zeilen sind disjoint zum Training (siehe pyment-and1).
+UKB_HOLDOUT_PREDICT_TSV = Path(
+    "~/git-repos/pyment-and1/training_runs/input_files/mri/"
+    "right_whole_thalamus/predict.tsv"
+).expanduser().resolve()
 
 MODEL_PATH = RUN_DIR / "model.keras"
 CONFIG_PATH = RUN_DIR / "config.yaml"
@@ -177,8 +186,27 @@ def _normalize_label_columns(df: pd.DataFrame, pred_var: str) -> pd.DataFrame:
     return df
 
 
-def load_dataset_labels(dataset_dir: Path, pred_var: str, n_subjects: int) -> pd.DataFrame:
-    """Bevorzugt subjects_dl_input.tsv; sonst Aufbau aus FreeSurfer-Stats + cropped.nii.gz."""
+def load_dataset_labels(
+    dataset_dir: Path,
+    pred_var: str,
+    n_subjects: int,
+    *,
+    labels_file: Path | None = None,
+) -> pd.DataFrame:
+    """Labels + filepaths für Prediction.
+
+    Standard: subjects_dl_input.tsv im Datensatzordner, sonst FreeSurfer-Stats.
+    Für UKB-Holdout: explizit ``labels_file`` setzen (z. B. predict.tsv).
+    """
+    if labels_file is not None:
+        if not labels_file.is_file():
+            raise FileNotFoundError(labels_file)
+        df = pd.read_csv(labels_file, sep=None, engine="python")
+        df = _normalize_label_columns(df, pred_var)
+        df = df.dropna(subset=[pred_var, "filepath"]).head(int(n_subjects))
+        print(f"Quelle: {labels_file} (Holdout), n={len(df)}")
+        return df
+
     for name in ("subjects_dl_input.tsv", "participants_dl_input.tsv"):
         cand = dataset_dir / name
         if cand.is_file():
@@ -219,10 +247,25 @@ def load_dataset_labels(dataset_dir: Path, pred_var: str, n_subjects: int) -> pd
     return df
 
 
+def print_subject_filepaths(df: pd.DataFrame) -> None:
+    """Subject-ID und vollständigen Pfad zu cropped.nii.gz ausgeben."""
+    id_col = "participant_id" if "participant_id" in df.columns else "subject-id"
+    print(f"Subjects + cropped.nii.gz (n={len(df)}):")
+    for _, row in df.iterrows():
+        print(f"  {row[id_col]}  {row['filepath']}")
+
+
 cfg = OmegaConf.load(CONFIG_PATH)
 pred_var = cfg.data.prediction_variable
 
-df = load_dataset_labels(DATASETS[DATASET], pred_var, N_SUBJECTS)
+ukb_labels_file = UKB_HOLDOUT_PREDICT_TSV if DATASET == "ukb" else None
+df = load_dataset_labels(
+    DATASETS[DATASET],
+    pred_var,
+    N_SUBJECTS,
+    labels_file=ukb_labels_file,
+)
+print_subject_filepaths(df)
 labels_tsv = RUN_DIR / f"{DATASET}_predict_labels_n{len(df)}.tsv"
 df.to_csv(labels_tsv, sep="\t", index=False)
 
