@@ -830,14 +830,13 @@ print("gespeichert:", out_tsv)
 
 # %%
 import plotly.graph_objects as go
-import plotly.io as pio
-from plotly.offline import init_notebook_mode
+from IPython.display import HTML, display
 from scipy.ndimage import binary_erosion
 
-# JupyterHub / Jupyter Notebook: Plotly.js einmal in die Session laden
-# (connected=False = JS einbetten, kein CDN nötig).
-init_notebook_mode(connected=False)
-pio.renderers.default = "notebook"
+# Für JupyterHub *und* nbconvert-HTML:
+# fig.show()/notebook-Renderer → oft height:100% ohne Elternhöhe → leerer Export.
+# Stattdessen fig.to_html(...) als text/html ausgeben (feste Pixelhöhe).
+_PLOTLY_JS_DONE = False
 
 # Farben analog zu plot_lrp_overlay (Abschnitt 7)
 COLOR_LEFT = "rgb(153, 51, 204)"
@@ -1057,12 +1056,45 @@ def plot_thalamus_lrp_3d(
         hovermode="closest",
     )
 
+    def _fix_plotly_umd(html: str) -> str:
+        """Plotly≥6 Bundles setzen fälschlich root.moduleName statt root.Plotly.
+
+        Ohne diesen Patch bleibt Plotly.newPlot undefined → leerer Rahmen im HTML-Export.
+        """
+        return html.replace(
+            "root.moduleName = factory();",
+            "root.Plotly = factory();",
+            1,
+        )
+
     if save_html is not None:
         save_html.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(str(save_html), include_plotlyjs=True)
+        standalone = _fix_plotly_umd(
+            fig.to_html(include_plotlyjs=True, full_html=True)
+        )
+        save_html.write_text(standalone, encoding="utf-8")
         print("3D-HTML:", save_html)
 
-    fig.show()
+    global _PLOTLY_JS_DONE
+    # Erste Figur: Plotly.js einbetten; weitere: nur Daten.
+    include_js = True if not _PLOTLY_JS_DONE else False
+    html = _fix_plotly_umd(
+        fig.to_html(
+            include_plotlyjs=include_js,
+            full_html=False,
+            config={"responsive": True, "displayModeBar": True},
+        )
+    )
+    _PLOTLY_JS_DONE = True
+    # Feste Höhe — sonst kollabiert der nbconvert-Export auf 0 Pixel.
+    display(
+        HTML(
+            '<div style="width:100%; max-width:1100px; height:820px; '
+            'border:1px solid #ddd; margin:0.5rem 0; overflow:hidden;">'
+            f"{html}"
+            "</div>"
+        )
+    )
     return fig
 
 
