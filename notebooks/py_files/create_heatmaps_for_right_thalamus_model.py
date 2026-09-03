@@ -2,13 +2,13 @@
 # jupyter:
 #   jupytext:
 #     cell_metadata_filter: -all
-#     formats: notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent,ipynb,py:percent
+#     formats: notebooks/ipynb_files//ipynb,notebooks/py_files//py:percent
 #     notebook_metadata_filter: all
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -70,7 +70,7 @@ DATASETS = [
     #"ds004711_AgeRisk",
 ]
 
-N_SUBJECTS = 3
+N_SUBJECTS = 5
 PRED_BATCH_SIZE = 8
 # Wie viele Subjects *pro Dataset* eine LRP-Figur bekommen (PNG + optional inline).
 # 1 reicht zum Spot-Check; höhere Werte blähen die .ipynb auf → 413 beim Speichern.
@@ -719,6 +719,7 @@ class AsegThalamusMaskPipeline:
 saved_niftis: list[Path] = []
 saved_masks: list[Path] = []
 mask_errors: list[str] = []
+preds_by_dataset: dict[str, list[dict[str, object]]] = {}
 
 for dataset_id in DATASETS:
     df = dataset_labels[dataset_id]
@@ -753,6 +754,8 @@ for dataset_id in DATASETS:
         f"inline={SHOW_HEATMAP_PLOTS_INLINE})"
     )
 
+    preds_by_dataset[dataset_id] = []
+
     for i, (_, row) in enumerate(
         tqdm(df.iterrows(), total=len(df), desc=f"LRP+mask [{dataset_id}]")
     ):
@@ -769,6 +772,13 @@ for dataset_id in DATASETS:
         vol = load_volume(path)
         X = np.expand_dims(vol, axis=0)
         y_pred = float(np.squeeze(model.predict(X, verbose=0)))
+        preds_by_dataset[dataset_id].append(
+            {
+                "subject_id": sid,
+                pred_var: y_true,
+                "prediction": y_pred,
+            }
+        )
         R = lrp(X)[0].numpy()
         R_masked = mask_explanation(vol, R)
 
@@ -809,6 +819,58 @@ if mask_errors:
     print(f"Warnung: {len(mask_errors)} Masken-/Input-Fehler:")
     for m in mask_errors:
         print(" -", m)
+
+# %% [markdown]
+# ## Korrelation True vs. Pred (pro Dataset)
+#
+# Scatter-Plots für echte vs. vorhergesagte Thalamus-Volumen — jeweils für die konfigurierten `DATASETS` und `N_SUBJECTS`.
+
+# %%
+for dataset_id, rows in preds_by_dataset.items():
+    if not rows:
+        print(f"[{dataset_id}] Keine Vorhersagen für Scatter-Plot.")
+        continue
+
+    preds_df = pd.DataFrame(rows)
+    print(f"\n[{dataset_id}] true vs. pred Thalamus-Volumen (n={len(preds_df)}, N_SUBJECTS={N_SUBJECTS}):")
+    display(preds_df[["subject_id", pred_var, "prediction"]])
+
+    y_true = preds_df[pred_var].astype(float).to_numpy()
+    y_pred = preds_df["prediction"].astype(float).to_numpy()
+
+    r_val, _ = pearsonr(y_true, y_pred)
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+    print(
+        f"[{dataset_id}] n={len(preds_df)}   Pearson r={r_val:.4f}   MAE={mae:.1f}"
+    )
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(y_true, y_pred, alpha=0.7, edgecolors="none")
+    lo = float(min(y_true.min(), y_pred.min()))
+    hi = float(max(y_true.max(), y_pred.max()))
+    ax.plot([lo, hi], [lo, hi], "k--", lw=1)
+    ax.set_xlabel(f"true {pred_var}")
+    ax.set_ylabel("prediction")
+    ax.set_title(f"{dataset_id}  r={r_val:.3f}  MAE={mae:.1f}")
+    ax.set_aspect("equal", adjustable="box")
+    fig.tight_layout()
+
+    scatter_path = RUN_DIR / f"scatter_true_vs_pred_{dataset_id}_n{len(preds_df)}.png"
+    fig.savefig(scatter_path, dpi=120)
+    print("Scatter:", scatter_path)
+
+    target_dir = (
+        keras_xai_root
+        / "output"
+        / "notebooks"
+        / "create_heatmaps_for_right_thalamus_model"
+        / dataset_id
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(target_dir / f"scatter_true_vs_pred_n{len(preds_df)}.png", dpi=120)
+
+    display(fig)
+    plt.close(fig)
 
 # %%
 from pathlib import Path
@@ -857,6 +919,9 @@ axes[2].axis("off")
 
 plt.tight_layout()
 plt.show()
+
+# %%
+img.get_fdata().min()
 
 # %%
 # Overlap: relevante LRP-Voxel ∩ rechter Thalamus (aseg label 49, gecroppt).
@@ -1058,4 +1123,393 @@ for dataset_id in DATASETS:
     )
 
 # %%
+from pathlib import Path
 
+import matplotlib.pyplot as plt
+import nibabel as nib
+import numpy as np
+
+base = Path(
+    "/mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "training_run_21h19m18s_20aug2026/heatmaps/ukb/5614724_20252_2_0"
+)
+heatmap_path = base / "lrp_heatmap_ukb_5614724_20252_2_0.nii.gz"
+mask_path = base / "aseg_mni152_right_thalamus_cropped.nii.gz"
+
+heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).squeeze()
+mask = np.asarray(nib.load(str(mask_path)).get_fdata(), dtype=np.float32).squeeze()
+mask = (mask > 0).astype(np.float32)
+
+assert heat.shape == mask.shape, (heat.shape, mask.shape)
+
+# Schnitt durch das Masken-Zentrum
+coords = np.argwhere(mask > 0)
+cx, cy, cz = coords.mean(axis=0).astype(int)
+
+# Heatmap auf [-1, 1] für die Farbskala (falls nötig)
+vmax = float(np.nanmax(np.abs(heat))) or 1.0
+heat_n = np.clip(heat / vmax, -1.0, 1.0)
+
+slices = [
+    (np.rot90(heat_n[cx]), np.rot90(mask[cx]), f"sagittal (x={cx})"),
+    (np.rot90(heat_n[:, cy]), np.rot90(mask[:, cy]), f"koronal (y={cy})"),
+    (heat_n[:, :, cz], mask[:, :, cz], f"axial (z={cz})"),
+]
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+fig.suptitle("LRP-Heatmap + rechter Thalamus (leicht transparent)", fontsize=11)
+
+for ax, (h_slc, m_slc, title) in zip(axes, slices):
+    im = ax.imshow(h_slc, cmap="seismic", vmin=-1, vmax=1)
+    # Maske nur dort sichtbar, wo Maske==1; leicht transparent
+    ax.imshow(
+        np.ma.masked_where(m_slc == 0, m_slc),
+        cmap="Greens",
+        alpha=0.35,
+        vmin=0,
+        vmax=1,
+    )
+    ax.set_title(title)
+    ax.axis("off")
+
+cbar = fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
+cbar.set_label("LRP-Relevanz (normiert)")
+plt.tight_layout()
+plt.show()
+
+
+# %% [markdown]
+# # vergleich summer LRP relevanzen der heatmap vs thalamus volumen (truth und predicted) / eigentlich sollte relevanzkonservierung gelten von layer zu layer
+
+# %%
+# Erstes Subject je Dataset: true/pred Thalamus-Volumen + Summe der LRP-Heatmap.
+import nibabel as nib
+
+for dataset_id in DATASETS:
+    df = dataset_labels[dataset_id]
+    if df.empty:
+        print(f"[{dataset_id}] Keine Subjects (N_SUBJECTS={N_SUBJECTS}).")
+        continue
+
+    row = df.iloc[0]
+    sid = str(row["participant_id"])
+    y_true = float(row[pred_var])
+
+    y_pred: float | None = None
+    for rec in preds_by_dataset.get(dataset_id, []):
+        if str(rec["subject_id"]) == sid:
+            y_pred = float(rec["prediction"])
+            break
+    if y_pred is None and preds_by_dataset.get(dataset_id):
+        y_pred = float(preds_by_dataset[dataset_id][0]["prediction"])
+
+    heatmap_path = (
+        RUN_DIR
+        / "heatmaps"
+        / dataset_id
+        / sid
+        / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
+    )
+    if heatmap_path.is_file():
+        heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).squeeze()
+        heat_sum = float(np.sum(heat))
+        heat_sum_abs = float(np.sum(abs(heat)))
+    else:
+        heat_sum = float("nan")
+        heat_sum_abs = float("nan")
+        print(f"[{dataset_id}] Warnung: Heatmap fehlt → {heatmap_path}")
+
+    print(f"\n[{dataset_id}] erstes Subject: {sid} (N_SUBJECTS={N_SUBJECTS})")
+    print(f"  true {pred_var}: {y_true:.1f}")
+    if y_pred is not None:
+        print(f"  prediction:    {y_pred:.1f}")
+    else:
+        print("  prediction:    (LRP-Zelle noch nicht ausgeführt?)")
+    print(f"  sum(heatmap):  {heat_sum:.3f}")
+    print(f"  sum(abs(heatmap)):  {heat_sum_abs:.3f}")
+
+# %% [markdown]
+# # liste aller relevanzen aller voxel
+
+# %%
+import nibabel as nib
+
+for dataset_id in DATASETS:
+    df = dataset_labels[dataset_id]
+    if df.empty:
+        print(f"[{dataset_id}] Keine Subjects.")
+        continue
+
+    sid = str(df.iloc[0]["participant_id"])
+    heatmap_path = (
+        RUN_DIR
+        / "heatmaps"
+        / dataset_id
+        / sid
+        / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
+    )
+    if not heatmap_path.is_file():
+        print(f"[{dataset_id}] Heatmap fehlt → {heatmap_path}")
+        continue
+
+    heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).ravel()
+    total = float(np.sum(heat))
+
+    relevance_table = pd.DataFrame(
+        {
+            "voxel_nr": np.arange(1, len(heat) + 1, dtype=np.int64),
+            "relevanz": heat,
+            "anteil_pct": np.where(
+                total != 0.0,
+                100.0 * heat / total,
+                0.0,
+            ),
+        }
+    )
+
+    print(
+        f"\n[{dataset_id}] {sid}: Relevanz je Voxel "
+        f"(n={len(relevance_table)}, sum={total:.6f})"
+    )
+    display(relevance_table)
+
+    # optional: als TSV speichern (empfohlen bei ~5,7 Mio. Voxeln)
+    tsv_path = RUN_DIR / f"relevance_voxels_{dataset_id}_{sid}.tsv"
+    relevance_table.to_csv(tsv_path, sep="\t", index=False)
+    print("gespeichert:", tsv_path)
+
+# %%
+import nibabel as nib
+
+# Mehr Nachkommastellen in der Notebook-Anzeige
+pd.set_option("display.float_format", lambda x: f"{x:.12f}")
+pd.set_option("display.max_rows", 20)  # head + ... + tail
+
+for dataset_id in DATASETS:
+    df = dataset_labels[dataset_id]
+    if df.empty:
+        continue
+
+    sid = str(df.iloc[0]["participant_id"])
+    heatmap_path = (
+        RUN_DIR / "heatmaps" / dataset_id / sid
+        / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
+    )
+    if not heatmap_path.is_file():
+        print(f"[{dataset_id}] Heatmap fehlt → {heatmap_path}")
+        continue
+
+    heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).ravel()
+    total = float(np.sum(heat))
+
+    relevance_table = pd.DataFrame(
+        {
+            "voxel_nr": np.arange(1, len(heat) + 1, dtype=np.int64),
+            "relevanz": heat,
+            "anteil_pct": np.where(total != 0.0, 100.0 * heat / total, 0.0),
+        }
+    )
+
+    print(f"\n[{dataset_id}] {sid}: Relevanz je Voxel (n={len(relevance_table)}, sum={total:.12f})")
+    display(relevance_table)
+
+    # TSV mit voller Genauigkeit (nicht gerundet)
+    tsv_path = RUN_DIR / f"relevance_voxels_{dataset_id}_{sid}.tsv"
+    relevance_table.to_csv(tsv_path, sep="\t", index=False, float_format="%.12f")
+    print("gespeichert:", tsv_path)
+
+# %%
+heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).ravel()
+
+print("sum:              ", float(np.sum(heat)))
+print("!= 0:             ", int(np.count_nonzero(heat)))
+print("== 0:             ", int(np.sum(heat == 0)))
+print("max:              ", float(np.max(heat)))
+print("min (non-zero):   ", float(heat[heat != 0].min()) if np.any(heat != 0) else None)
+print("mean (non-zero):  ", float(heat[heat != 0].mean()) if np.any(heat != 0) else None)
+
+# %%
+import nibabel as nib
+
+pd.set_option("display.float_format", lambda x: f"{x:.12f}")
+pd.set_option("display.max_rows", 110)
+
+for dataset_id in DATASETS:
+    df = dataset_labels[dataset_id]
+    if df.empty:
+        print(f"[{dataset_id}] Keine Subjects.")
+        continue
+
+    sid = str(df.iloc[0]["participant_id"])
+    heatmap_path = (
+        RUN_DIR
+        / "heatmaps"
+        / dataset_id
+        / sid
+        / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
+    )
+    if not heatmap_path.is_file():
+        print(f"[{dataset_id}] Heatmap fehlt → {heatmap_path}")
+        continue
+
+    heat = np.asarray(nib.load(str(heatmap_path)).get_fdata(), dtype=np.float32).ravel()
+    total_abs = float(np.sum(np.abs(heat)))  # nur für Prozent-Nenner
+
+    relevance_table = pd.DataFrame(
+        {
+            "voxel_nr": np.arange(1, len(heat) + 1, dtype=np.int64),
+            "relevanz": heat,  # ← Vorzeichen bleibt (+/-)
+            "anteil_pct": np.where(  # ← nur hier abs()
+                total_abs != 0.0,
+                100.0 * np.abs(heat) / total_abs,
+                0.0,
+            ),
+        }
+    )
+
+    relevance_table = relevance_table.sort_values(
+        "anteil_pct", ascending=False
+    ).reset_index(drop=True)
+    relevance_table.insert(0, "rang", np.arange(1, len(relevance_table) + 1))
+
+    print(
+        f"\n[{dataset_id}] {sid}: sortiert nach anteil_pct "
+        f"(n={len(relevance_table)}, sum={float(np.sum(heat)):.12f}, "
+        f"sum|R|={total_abs:.12f})"
+    )
+
+    n_show = 50
+    preview = pd.concat(
+        [relevance_table.head(n_show), relevance_table.tail(n_show)],
+        ignore_index=True,
+    )
+
+    display(
+        preview.style.format(
+            {
+                "relevanz": "{:.12f}",      # z.B. -0.003 oder +0.003
+                "anteil_pct": "{:.4f}%",    # immer >= 0, z.B. 5.0000%
+            }
+        )
+    )
+    print(f"... {len(relevance_table) - 2 * n_show} Zeilen dazwischen ausgeblendet ...")
+
+    tsv_path = RUN_DIR / f"relevance_voxels_sorted_{dataset_id}_{sid}.tsv"
+    relevance_table.to_csv(tsv_path, sep="\t", index=False, float_format="%.12f")
+    print("gespeichert:", tsv_path)
+
+# %% [markdown]
+# # anteil der summen der relevanz voxel innerhalb des thalamus am prädiziertem gesamtthalamus
+
+# %%
+import nibabel as nib
+
+def _load_nii(path: Path) -> np.ndarray:
+    return np.asarray(nib.load(str(path)).get_fdata(), dtype=np.float32).squeeze()
+
+
+def _pred_for_subject(dataset_id: str, sid: str) -> float | None:
+    for rec in preds_by_dataset.get(dataset_id, []):
+        if str(rec["subject_id"]) == sid:
+            return float(rec["prediction"])
+    return None
+
+
+def _fmt_pred(x: float | None) -> str:
+    return f"{x:.1f}" if x is not None else "nan"
+
+
+thalamus_relevance_rows: list[dict[str, object]] = []
+
+for dataset_id in DATASETS:
+    df = dataset_labels[dataset_id]
+
+    print(
+        f"\n======== {dataset_id}: Relevanz in linker/rechter Thalamus "
+        f"(n={len(df)}) ========"
+    )
+
+    for _, row in df.iterrows():
+        sid = str(row["participant_id"])
+        y_true = float(row[pred_var])
+        y_pred = _pred_for_subject(dataset_id, sid)
+
+        subject_dir = RUN_DIR / "heatmaps" / dataset_id / sid
+        heatmap_path = subject_dir / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
+        left_mask_path = subject_dir / "aseg_mni152_left_thalamus_cropped.nii.gz"
+        right_mask_path = subject_dir / "aseg_mni152_right_thalamus_cropped.nii.gz"
+
+        if not heatmap_path.is_file():
+            print(f"[{dataset_id}/{sid}] Heatmap fehlt → {heatmap_path}")
+            continue
+        if not left_mask_path.is_file() or not right_mask_path.is_file():
+            print(
+                f"[{dataset_id}/{sid}] Thalamus-Maske fehlt "
+                f"(left={left_mask_path.is_file()}, right={right_mask_path.is_file()})"
+            )
+            continue
+
+        heat = _load_nii(heatmap_path)
+        left_mask = _load_nii(left_mask_path) > 0
+        right_mask = _load_nii(right_mask_path) > 0
+
+        if heat.shape != left_mask.shape or heat.shape != right_mask.shape:
+            print(f"[{dataset_id}/{sid}] Shape-Mismatch: heat={heat.shape}")
+            continue
+
+        sum_total = float(np.sum(heat))
+        sum_abs_total = float(np.sum(np.abs(heat)))
+
+        sum_left = float(np.sum(heat[left_mask]))
+        sum_right = float(np.sum(heat[right_mask]))
+        sum_abs_left = float(np.sum(np.abs(heat[left_mask])))
+        sum_abs_right = float(np.sum(np.abs(heat[right_mask])))
+        sum_abs_outside = sum_abs_total - sum_abs_left - sum_abs_right
+
+        pct_abs_left = 100.0 * sum_abs_left / sum_abs_total if sum_abs_total > 0 else np.nan
+        pct_abs_right = 100.0 * sum_abs_right / sum_abs_total if sum_abs_total > 0 else np.nan
+        pct_abs_outside = 100.0 * sum_abs_outside / sum_abs_total if sum_abs_total > 0 else np.nan
+
+        pct_of_pred_right = 100.0 * sum_right / y_pred if y_pred not in (None, 0.0) else np.nan
+        pct_of_pred_left = 100.0 * sum_left / y_pred if y_pred not in (None, 0.0) else np.nan
+
+        print(
+            f"[{dataset_id}/{sid}]  "
+            f"true={y_true:.1f}  pred={_fmt_pred(y_pred)}\n"
+            f"  sum(R) gesamt:             {sum_total:+.6e}\n"
+            f"  sum(R) linker Thalamus:    {sum_left:+.6e}   "
+            f"({pct_abs_left:.4f}% von |R| gesamt)\n"
+            f"  sum(R) rechter Thalamus:   {sum_right:+.6e}   "
+            f"({pct_abs_right:.4f}% von |R| gesamt)\n"
+            f"  sum(|R|) außerhalb beider: {sum_abs_outside:.6e}   "
+            f"({pct_abs_outside:.4f}% von |R| gesamt)\n"
+            f"  sum(R_right) / prediction: {pct_of_pred_right:.4f}%\n"
+            f"  sum(R_left)  / prediction: {pct_of_pred_left:.4f}%"
+        )
+
+        thalamus_relevance_rows.append(
+            {
+                "dataset_id": dataset_id,
+                "subject_id": sid,
+                "true_volume": y_true,
+                "prediction": y_pred,
+                "sum_R_total": sum_total,
+                "sum_abs_R_total": sum_abs_total,
+                "sum_R_left_thalamus": sum_left,
+                "sum_R_right_thalamus": sum_right,
+                "pct_abs_left_of_total_R": pct_abs_left,
+                "pct_abs_right_of_total_R": pct_abs_right,
+                "pct_abs_outside_both_of_total_R": pct_abs_outside,
+                "pct_sum_R_right_of_prediction": pct_of_pred_right,
+                "pct_sum_R_left_of_prediction": pct_of_pred_left,
+            }
+        )
+
+thalamus_relevance_df = pd.DataFrame(thalamus_relevance_rows)
+display(thalamus_relevance_df)
+
+tsv_path = RUN_DIR / "lrp_relevance_left_right_thalamus_by_subject.tsv"
+thalamus_relevance_df.to_csv(tsv_path, sep="\t", index=False, float_format="%.12e")
+print("\ngespeichert:", tsv_path)
+
+# %%
