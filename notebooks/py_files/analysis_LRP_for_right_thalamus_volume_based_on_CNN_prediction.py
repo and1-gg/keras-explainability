@@ -24,17 +24,19 @@
 # 1. `N_SUBJECTS` Holdout-Fälle aus **IXI** und **UKB** laden
 # 2. Vorhersagen + LRP-Heatmaps berechnen
 # 3. FreeSurfer-`aseg` als Thalamus-Maske nach MNI152 bringen
-# 4. Anteil der Relevanz **im Thalamus** vs. außerhalb auswerten
-# 5. `N_PLOT_SUBJECTS` Fälle pro Dataset plotten
-# 6. Interaktiver 3D-Plot (Gehirn + beide Thalamus-Masken + unnormierte LRP)
+# 4. True vs. Predicted
+# 5. Intensitäts-QC (3D + Histogramm) des ersten ungejitterten Subjects
+# 6. Anteil der Relevanz **im Thalamus** vs. außerhalb auswerten
+# 7. Interaktiver 3D-Plot (Gehirn + beide Thalamus-Masken + unnormierte LRP)
 #    für das **erste** Subject von IXI und UKB
 #
-# **Teil B — Jitter-/Simulations-Framework** (nur UKB, außer B.4):
+# **Teil B — Jitter-/Simulations-Framework** (nur UKB, außer B.5):
 #
 # 1. True vs. Predicted mit dem auf gejitterten Volumes trainierten Modell
-# 2. QC der gejitterten Volumes (Nicht-Holdout)
-# 3. LRP-Heatmaps auf gejitterten Holdout-Volumes (Original-Modell)
-# 4. Interaktiver 3D-Plot der Jitter-Modell-LRP (erstes Subject IXI + UKB)
+# 2. Intensitäts-QC (3D + Histogramm) des ersten gejitterten UKB-Holdout-Subjects
+# 3. QC der gejitterten Volumes (Nicht-Holdout)
+# 4. LRP-Heatmaps auf gejitterten Holdout-Volumes (Original-Modell)
+# 5. Interaktiver 3D-Plot der Jitter-Modell-LRP (erstes Subject IXI + UKB)
 #
 # **Teil C — Relevanzerhaltung Schicht für Schicht:**
 #
@@ -294,7 +296,11 @@ print("pred_var:", pred_var)
 #
 # Single-Device-Modell (keine `MirroredStrategy`). LRP-Composite für SFCN:
 # zwei `flat`-Schichten, vier αβ-Schichten, ε am Dense-Ausgang.
-# Relevanz außerhalb des Gehirns (`voxel==0`) wird auf 0 gesetzt.
+#
+# Die Heatmaps bleiben **unmaskiert**: Relevanz auf Hintergrundvoxeln (`x==0`)
+# wird **nicht** auf 0 gesetzt (kein `mask_explanation`). So bleibt die volle
+# LRP-Ausgabe für Plot, NIfTI und ΣR-Auswertung erhalten — inkl. der durch
+# `flat` in den Hintergrund fließenden Relevanz.
 
 # %%
 model = _build_single_device_model(cfg)
@@ -330,12 +336,6 @@ strategy = LRPStrategy(
     ]
 )
 lrp = LRP(model, layer=len(model.layers) - 1, idx=0, strategy=strategy)
-
-
-def mask_explanation(volume: np.ndarray, explanation: np.ndarray) -> np.ndarray:
-    x = volume.squeeze()
-    expl = explanation.squeeze().astype(np.float32)
-    return expl * (x != 0).astype(np.float32)
 
 
 def save_heatmap_nifti(explanation: np.ndarray, reference_nii_path: str, out_path: Path) -> None:
@@ -669,21 +669,19 @@ for dataset_id in DATASETS:
 
         vol = load_volume(path)
         y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
-        # mask_explanation() verwirft die Relevanz auf Hintergrundvoxeln (x==0).
-        # Die Rohsumme wird vorher festgehalten, damit A.9 die Differenz ausweisen kann.
-        R_raw = lrp(np.expand_dims(vol, 0))[0].numpy()
-        R_masked = mask_explanation(vol, R_raw)
+        # Unmaskierte LRP-Ausgabe (inkl. Hintergrundvoxel) — kein mask_explanation.
+        R = lrp(np.expand_dims(vol, 0))[0].numpy()
         preds_by_dataset[dataset_id].append(
             {
                 "subject_id": sid,
                 pred_var: y_true,
                 "prediction": y_pred,
-                "sum_R_unmasked": float(np.sum(R_raw)),
+                "sum_R": float(np.sum(R)),
             }
         )
         nii_path = heatmaps_dir / sid / f"lrp_heatmap_{dataset_id}_{sid}.nii.gz"
         nii_path.parent.mkdir(parents=True, exist_ok=True)
-        save_heatmap_nifti(R_masked, path, nii_path)
+        save_heatmap_nifti(R, path, nii_path)
         saved_niftis.append(nii_path)
 
         try:
@@ -698,7 +696,7 @@ for dataset_id in DATASETS:
 
         if i < N_PLOT_SUBJECTS:
             plot_lrp_overlay(
-                R_masked,
+                R,
                 left_data,
                 right_data,
                 title=f"{dataset_id}  {sid}  true={y_true:.0f}  pred={y_pred:.0f}",
@@ -714,7 +712,7 @@ for dataset_id in DATASETS:
         # if i == 0:
         #     plot_lrp_slices(
         #         vol,
-        #         R_masked,
+        #         R,
         #         title=f"{dataset_id}  {sid}  Slice-Zoom um LRP-Peak",
         #         save_path=plot_dir / f"lrp_slices_{sid}.png",
         #         show_inline=SHOW_PLOTS_INLINE,
@@ -760,39 +758,170 @@ for dataset_id, rows in preds_by_dataset.items():
 
 
 # %% [markdown]
-# ## A.9. Relevanz im Thalamus
+# ## A.9. Intensitäts-QC — erstes Subject (ungejittert)
+#
+# Für das **erste** Holdout-Subject des ersten Datensatzes in `DATASETS` (typisch IXI):
+# Intensitäten des ungejitterten `cropped.nii.gz` — min/max, Histogramm (40 Bins,
+# nur `x≠0`) und interaktiver 3D-Intensitätsplot (Plotly, feste HTML-Höhe).
+
+# %%
+import plotly.graph_objects as go
+from IPython.display import HTML
+
+
+def _fix_plotly_umd(html: str) -> str:
+    """Plotly≥6 Bundles setzen fälschlich root.moduleName statt root.Plotly."""
+    return html.replace(
+        "root.moduleName = factory();",
+        "root.Plotly = factory();",
+        1,
+    )
+
+
+def plot_volume_intensity_qc(
+    volume: np.ndarray,
+    *,
+    title: str,
+    n_bins: int = 40,
+    max_points: int = 40_000,
+    step: int = 2,
+    show_inline: bool = True,
+) -> None:
+    """min/max printen, Histogramm (≤n_bins) und 3D-Intensitätsplot."""
+    vol = np.asarray(volume, dtype=np.float32).squeeze()
+    flat = vol.ravel()
+    brain = flat[flat != 0]
+    nx, ny, nz = vol.shape
+
+    print(f"{title}")
+    print(f"Shape:   {vol.shape}  (x, y, z)  →  {flat.size:,} Voxel")
+    print(f"min/max (gesamtes Volume): {flat.min():.6g} / {flat.max():.6g}")
+    print(f"mean/median (gesamtes Volume): {flat.mean():.6g} / {np.median(flat):.6g}")
+    print(f"Anteil x==0 (Hintergrund): {100.0 * np.mean(flat == 0):.1f}%")
+    if brain.size:
+        print(f"min/max (nur x≠0): {brain.min():.6g} / {brain.max():.6g}")
+        print(f"mean/median (nur x≠0): {brain.mean():.6g} / {np.median(brain):.6g}")
+
+    fig_h, ax = plt.subplots(figsize=(8, 4))
+    if brain.size:
+        ax.hist(brain, bins=int(n_bins), color="steelblue", edgecolor="white", linewidth=0.4)
+    ax.set_xlabel("Intensität")
+    ax.set_ylabel("Anzahl Voxel")
+    ax.set_title(
+        f"{title}\nHistogramm ({n_bins} Bins, nur x≠0)  |  "
+        f"Volume min/max = {flat.min():.4g} / {flat.max():.4g}"
+    )
+    if brain.size:
+        ax.axvline(brain.mean(), color="C1", ls="--", lw=1.2, label=f"mean={brain.mean():.3g}")
+        ax.axvline(
+            np.median(brain), color="C3", ls=":", lw=1.2, label=f"median={np.median(brain):.3g}"
+        )
+        ax.legend(frameon=False)
+    fig_h.tight_layout()
+    if show_inline:
+        display(fig_h)
+    plt.close(fig_h)
+
+    idx = np.argwhere(vol != 0)
+    if idx.size:
+        idx = idx[
+            (idx[:, 0] % step == 0) & (idx[:, 1] % step == 0) & (idx[:, 2] % step == 0)
+        ]
+        if len(idx) > max_points:
+            rng = np.random.default_rng(0)
+            idx = idx[rng.choice(len(idx), size=max_points, replace=False)]
+        vals = vol[idx[:, 0], idx[:, 1], idx[:, 2]]
+        vmax = float(np.percentile(vals, 99.5)) if vals.size else 1.0
+    else:
+        vals = np.array([], dtype=np.float32)
+        vmax = 1.0
+
+    fig3d = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=idx[:, 0] if idx.size else [],
+                y=idx[:, 1] if idx.size else [],
+                z=idx[:, 2] if idx.size else [],
+                mode="markers",
+                marker=dict(
+                    size=1.8,
+                    color=vals,
+                    colorscale="Gray",
+                    cmin=0.0,
+                    cmax=vmax,
+                    opacity=0.55,
+                    colorbar=dict(title="Intensität", thickness=18, len=0.7),
+                ),
+                hovertemplate=(
+                    "x=%{x:.0f} y=%{y:.0f} z=%{z:.0f}<br>"
+                    "I=%{marker.color:.4g}<extra></extra>"
+                ),
+            )
+        ]
+    )
+    fig3d.update_layout(
+        title=f"{title} · 3D-Intensitäten (n={len(idx)} Punkte)",
+        scene=dict(
+            xaxis_title="x (sagittal)",
+            yaxis_title="y (koronal)",
+            zaxis_title="z (axial)",
+            aspectmode="data",
+            xaxis=dict(range=[0, nx - 1]),
+            yaxis=dict(range=[0, ny - 1]),
+            zaxis=dict(range=[0, nz - 1]),
+        ),
+        width=980,
+        height=780,
+        margin=dict(l=0, r=60, t=60, b=10),
+    )
+    if show_inline:
+        html = _fix_plotly_umd(
+            fig3d.to_html(
+                include_plotlyjs=True,
+                full_html=False,
+                config={"responsive": True, "displayModeBar": True},
+            )
+        )
+        display(
+            HTML(
+                '<div style="width:100%; max-width:1100px; height:820px; '
+                'border:1px solid #ddd; margin:0.5rem 0; overflow:hidden;">'
+                f"{html}"
+                "</div>"
+            )
+        )
+
+
+# Erstes Subject des ersten Datensatzes in DATASETS (Holdout-/Analyse-Labels).
+_ds0 = DATASETS[0]
+_row0 = dataset_labels[_ds0].iloc[0]
+_sid0 = str(_row0["participant_id"])
+_path0 = Path(str(_row0["filepath"]))
+if not _path0.is_file():
+    raise FileNotFoundError(f"[{_ds0}/{_sid0}] Volume fehlt: {_path0}")
+
+_vol0 = np.asarray(nib.load(str(_path0)).get_fdata(), dtype=np.float32).squeeze()
+plot_volume_intensity_qc(
+    _vol0,
+    title=f"A.9  {_ds0}  {_sid0}  ungejittert  ({_path0.name})",
+    n_bins=40,
+    show_inline=SHOW_PLOTS_INLINE,
+)
+
+
+# %% [markdown]
+# ## A.10. Relevanz im Thalamus
 #
 # Anteil der |LRP|-Summe in linker / rechter Thalamus-Maske vs. außerhalb.
 # Kompakte Voxel-Statistik statt einer Tabelle aller ~5,7 Mio. Voxel.
 #
-# ### Warum `sum_R` kleiner ist als `pred`
+# Die Heatmaps auf der Platte sind **unmaskiert** (kein `mask_explanation`):
+# ΣR enthält auch Relevanz auf Hintergrundvoxeln (`x==0`), die vor allem durch
+# die `flat`-Regel der eingangsnahen Convs entsteht. `sum_R` sollte daher nahe
+# an `pred` liegen (Teil C: Relevanzerhaltung ~100 %).
 #
-# Die Heatmaps auf der Platte sind **maskiert**: `mask_explanation()` (A.5) multipliziert
-# die LRP-Ausgabe mit `(x != 0)` und verwirft damit die gesamte Relevanz auf
-# Hintergrundvoxeln außerhalb des Gehirns — das sind je nach Subject rund **65–70 %
-# aller Voxel**. Erst dieses maskierte Volume wird in A.7 als NIfTI gespeichert und hier
-# wieder eingelesen. `sum_R` ist also die Relevanz **im Gehirn**, nicht die Gesamtrelevanz.
-#
-# Dass überhaupt nennenswert Relevanz im Hintergrund landet, liegt an der **`flat`-Regel**
-# der beiden eingangsnahen Conv-Schichten (Strategie in A.5). Bei αβ und ε ist die
-# Relevanz eines Voxels proportional zu seiner Aktivierung, ein Voxel mit `x = 0` bekommt
-# zwangsläufig `R = 0`. `flat` setzt dagegen `a ← 1` und verteilt gleichmäßig über das
-# rezeptive Feld, unabhängig vom Voxelwert — also auch in die Luft um das Gehirn.
-#
-# Zwei Spalten machen das explizit:
-#
-# | Spalte | Bedeutung |
-# |---|---|
-# | `sum_R_unmasked` | ΣR der rohen LRP-Ausgabe, direkt in A.7 vor der Maskierung gemessen |
-# | `pct_discarded_background` | Anteil davon, der auf `x == 0` liegt und verworfen wurde |
-#
-# Ein Erhaltungsproblem ist das **nicht**: `sum_R_unmasked` liegt nahe an `pred`
-# (Teil C weist über alle Schichten ~100 % Erhaltung aus). Beide Spalten bleiben leer,
-# wenn A.7 in derselben Kernel-Session nicht gelaufen ist, da die Rohsumme dort in
-# `preds_by_dataset` entsteht.
-#
-# Die Spalten `pct_|R|_left` / `pct_|R|_right` / `pct_|R|_outside` sind Anteile an der
-# **Gehirn**-Relevanz `sum_|R|` — für die Thalamus-Frage die passende Normierung.
+# Die Spalten `pct_|R|_left` / `pct_|R|_right` / `pct_|R|_outside` sind Anteile
+# an der **gesamten** |R|-Summe (inkl. Hintergrund).
 
 # %%
 def _load_nii(path: Path) -> np.ndarray:
@@ -803,14 +932,6 @@ def _pred_for_subject(dataset_id: str, sid: str) -> float | None:
     for rec in preds_by_dataset.get(dataset_id, []):
         if str(rec["subject_id"]) == sid:
             return float(rec["prediction"])
-    return None
-
-
-def _unmasked_sum_for_subject(dataset_id: str, sid: str) -> float | None:
-    """ΣR der *rohen* LRP-Ausgabe aus A.7 (vor mask_explanation)."""
-    for rec in preds_by_dataset.get(dataset_id, []):
-        if str(rec["subject_id"]) == sid and rec.get("sum_R_unmasked") is not None:
-            return float(rec["sum_R_unmasked"])
     return None
 
 
@@ -841,15 +962,6 @@ for dataset_id in DATASETS:
         sum_abs_out = sum_abs - sum_abs_left - sum_abs_right
         nz = heat[heat != 0]
 
-        # Differenz zur Vorhersage: mask_explanation() in A.7 setzt die Relevanz
-        # auf allen Hintergrundvoxeln (x==0) auf 0. Nur diese Masse fehlt hier.
-        sum_r_unmasked = _unmasked_sum_for_subject(dataset_id, sid)
-        pct_discarded = (
-            100.0 * (sum_r_unmasked - sum_total) / sum_r_unmasked
-            if sum_r_unmasked
-            else np.nan
-        )
-
         rows.append(
             {
                 "dataset": dataset_id,
@@ -857,8 +969,6 @@ for dataset_id in DATASETS:
                 "true": y_true,
                 "pred": y_pred,
                 "sum_R": sum_total,
-                "sum_R_unmasked": sum_r_unmasked,
-                "pct_discarded_background": pct_discarded,
                 "sum_|R|": sum_abs,
                 "pct_|R|_left": 100.0 * sum_abs_left / sum_abs if sum_abs else np.nan,
                 "pct_|R|_right": 100.0 * sum_abs_right / sum_abs if sum_abs else np.nan,
@@ -871,17 +981,12 @@ for dataset_id in DATASETS:
 
 summary = pd.DataFrame(rows)
 display(summary.round(4))
-if "sum_R_unmasked" in summary.columns and summary["sum_R_unmasked"].isna().all():
-    print(
-        "Hinweis: sum_R_unmasked ist leer — A.7 wurde in dieser Session nicht (neu) "
-        "ausgeführt. Die Rohsumme entsteht dort in preds_by_dataset."
-    )
 out_tsv = RUN_DIR / "lrp_relevance_left_right_thalamus_by_subject.tsv"
 summary.to_csv(out_tsv, sep="\t", index=False, float_format="%.6e")
 print("gespeichert:", out_tsv)
 
 # %% [markdown]
-# ## A.10. Interaktiver 3D-Plot (erstes Subject je Dataset)
+# ## A.11. Interaktiver 3D-Plot (erstes Subject je Dataset)
 #
 # Für das **erste** IXI- und UKB-Subject: Gehirnkontur plus beide FreeSurfer-Thalamus-Masken
 # (`aseg` 10 links / 49 rechts) und die **unnormierte** LRP-Heatmap.
@@ -1227,6 +1332,7 @@ for dataset_id in DATASETS:
 # Holdout-Predict wie in Teil A auf den originalen `cropped.nii.gz`).
 #
 # Vergleichspunkt zu **A.8** (Original-Modell auf denselben Holdout-Fällen).
+# Danach folgt **B.2** (Intensitäts-QC des ersten gejitterten Holdout-Subjects).
 
 # %%
 JITTER_MODEL_RUN_DIR = Path(
@@ -1307,7 +1413,41 @@ if SHOW_PLOTS_INLINE:
 plt.close(fig)
 
 # %% [markdown]
-# ## B.2. QC der gejitterten UKB-Volumes (Nicht-Holdout)
+# ## B.2. Intensitäts-QC — erstes UKB-Holdout-Subject (gejittert)
+#
+# Analog zu **A.9**, aber für das **erste** UKB-Holdout-Subject und das gejitterte
+# Volume
+# `T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`
+# (rechter Thalamus erhalten, Rest permutiert).
+# min/max, Histogramm (40 Bins, nur `x≠0`) und 3D-Intensitätsplot.
+# Nutzt `plot_volume_intensity_qc` aus A.9.
+
+# %%
+_JITTER_ROOT_B2 = Path("/mnt/users/andreasre/data/jittered_data")
+_JITTER_FILE_B2 = "T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz"
+
+_row_ukb0 = dataset_labels["ukb"].iloc[0]
+_sid_ukb0 = str(_row_ukb0["participant_id"])
+_jitter_path0 = (
+    _JITTER_ROOT_B2 / "ukb" / "recon" / _sid_ukb0 / "mri" / _JITTER_FILE_B2
+)
+if not _jitter_path0.is_file():
+    raise FileNotFoundError(
+        f"[ukb/{_sid_ukb0}] gejittertes Volume fehlt: {_jitter_path0}"
+    )
+
+_vol_jit0 = np.asarray(
+    nib.load(str(_jitter_path0)).get_fdata(), dtype=np.float32
+).squeeze()
+plot_volume_intensity_qc(
+    _vol_jit0,
+    title=f"B.2  ukb  {_sid_ukb0}  gejittert  ({_jitter_path0.name})",
+    n_bins=40,
+    show_inline=SHOW_PLOTS_INLINE,
+)
+
+# %% [markdown]
+# ## B.3. QC der gejitterten UKB-Volumes (Nicht-Holdout)
 #
 # Sanity-Check für das **Simulations-/Jitter-Framework**: In den Dateien
 #
@@ -1318,7 +1458,7 @@ plt.close(fig)
 #
 # bleibt der **rechte Thalamus** unverändert, das restliche Gehirn wird voxelweise
 # permutiert ("shuffled"). Wenn das Modell tatsächlich das rechte Thalamus-Volumen
-# liest, darf diese Manipulation die Vorhersage kaum verändern (→ Abschnitt B.3).
+# liest, darf diese Manipulation die Vorhersage kaum verändern (→ Abschnitt B.4).
 #
 # Nur für `ukb`, da nur dieser Datensatz gejittert vorliegt.
 #
@@ -1326,7 +1466,7 @@ plt.close(fig)
 #
 # 1. `N_JITTER_QC_SUBJECTS` Subjects **zufällig** (`JITTER_QC_SEED`, reproduzierbar) aus dem
 #    Jitter-Verzeichnis ziehen, dabei **alle** Subject-IDs des Holdout-Splits
-#    (`UKB_HOLDOUT_PREDICT_TSV`, n = 10 000) ausschließen — die bleiben Abschnitt B.3 vorbehalten.
+#    (`UKB_HOLDOUT_PREDICT_TSV`, n = 10 000) ausschließen — die bleiben Abschnitt B.4 vorbehalten.
 # 2. Pro Subject sagittal / koronal / axial plotten (gleiche Schnitte wie Abschnitt A.7:
 #    `x=70`, `y=104`, `z=78`), mit **Colorbar an der Seite** (Grauwert-Intensität).
 #    Die grüne Kontur markiert die erhaltene rechte Thalamus-Maske.
@@ -1557,7 +1697,7 @@ for sid in jitter_qc_subjects:
 display(pd.DataFrame(qc_rows))
 
 # %% [markdown]
-# ## B.3. LRP-Heatmaps für die gejitterten UKB-Holdout-Volumes
+# ## B.4. LRP-Heatmaps für die gejitterten UKB-Holdout-Volumes
 #
 # Identisch zu **Abschnitt A.7**, nur ist der Input jetzt das gejitterte Volume
 #
@@ -1581,7 +1721,7 @@ display(pd.DataFrame(qc_rows))
 # permutierte Umfeld keine nutzbare Struktur mehr trägt.
 #
 # Voraussetzungen: Abschnitte 1–7 gelaufen (`model`, `lrp`, `dataset_labels`, `plot_lrp_overlay`)
-# sowie Abschnitt B.2 (Jitter-Pfad-Helfer). Fehlende Jitter-Dateien werden übersprungen und
+# sowie Abschnitt B.3 (Jitter-Pfad-Helfer). Fehlende Jitter-Dateien werden übersprungen und
 # am Ende aufgelistet.
 
 # %%
@@ -1647,11 +1787,11 @@ for i, (_, row) in enumerate(
 
     vol = load_volume(str(jitter_path))
     y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
-    R_masked = mask_explanation(vol, lrp(np.expand_dims(vol, 0))[0].numpy())
+    R = lrp(np.expand_dims(vol, 0))[0].numpy()
 
     nii_path = JITTER_HEATMAPS_DIR / sid / f"lrp_heatmap_{JITTER_DATASET}_jittered_{sid}.nii.gz"
     nii_path.parent.mkdir(parents=True, exist_ok=True)
-    save_heatmap_nifti(R_masked, str(jitter_path), nii_path)
+    save_heatmap_nifti(R, str(jitter_path), nii_path)
     jitter_saved_niftis.append(nii_path)
 
     left_path, right_path = jitter_mask_paths(sid)
@@ -1672,14 +1812,14 @@ for i, (_, row) in enumerate(
                 float("nan") if right_data is None else _original_right_share(sid, right_data)
             ),
             "right_share_jittered": (
-                float("nan") if right_data is None else _right_thalamus_share(R_masked, right_data)
+                float("nan") if right_data is None else _right_thalamus_share(R, right_data)
             ),
         }
     )
 
     if i < N_PLOT_JITTER_SUBJECTS:
         plot_lrp_overlay(
-            R_masked,
+            R,
             left_data,
             right_data,
             title=(
@@ -1705,9 +1845,9 @@ if jitter_rows:
         print(f"mittlere |pred_jittered - pred_original|: {mae_shift:.1f}")
 
 # %% [markdown]
-# ## B.4. Interaktiver 3D-Plot — Jitter-Modell (erstes Subject je Dataset)
+# ## B.5. Interaktiver 3D-Plot — Jitter-Modell (erstes Subject je Dataset)
 #
-# Analog zu **A.10**, aber die LRP-Heatmap kommt vom **auf gejitterten Volumes
+# Analog zu **A.11**, aber die LRP-Heatmap kommt vom **auf gejitterten Volumes
 # trainierten Modell** (`training_run_05h09m52s_04sep2026`). Input sind weiterhin die
 # originalen Holdout-`cropped.nii.gz` (wie in B.1 / Teil C), Thalamus-Masken aus A.7.
 #
@@ -1715,10 +1855,36 @@ if jitter_rows:
 # `RUN_DIR/heatmaps_jitter_model/<dataset>/<subject-id>/` → interaktives HTML
 # (Gehirnkontur + beide FreeSurfer-Masken + unnormierte LRP).
 #
-# Voraussetzungen: A.4–A.7 (Labels, Loader, Masken), A.10 (`plot_thalamus_lrp_3d`),
-# B.1 bzw. `_ensure_jitter_model`.
+# Voraussetzungen: A.4–A.7 (Labels, Loader, Masken), A.11 (`plot_thalamus_lrp_3d`).
+# `_ensure_jitter_model` (unten) nutzt `jitter_model` aus B.1 oder lädt nach.
 
 # %%
+def _ensure_jitter_model():
+    """B.1 legt `jitter_model` an; falls noch nicht gelaufen, hier nachladen."""
+    if "jitter_model" in globals() and globals()["jitter_model"] is not None:
+        return globals()["jitter_model"]
+    run_dir = Path(
+        "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+        "training_run_05h09m52s_04sep2026"
+    ).expanduser().resolve()
+    model_path = run_dir / "model.keras"
+    config_path = run_dir / "config.yaml"
+    if not model_path.is_file():
+        raise FileNotFoundError(f"Jitter-Modell fehlt: {model_path}")
+    jcfg = OmegaConf.load(config_path)
+    with open_dict(jcfg):
+        jcfg.paths.csv_dir = str(run_dir)
+        if "prediction" not in jcfg.training:
+            jcfg.training.prediction = {}
+        jcfg.training.prediction.batch_size = int(PRED_BATCH_SIZE)
+    jm = _build_single_device_model(jcfg)
+    w0 = jm.get_weights()[0].copy()
+    jm.load_weights(str(model_path))
+    if float(np.mean(np.abs(jm.get_weights()[0] - w0))) < 1e-9:
+        raise RuntimeError("Jitter-Modell-Gewichte wurden nicht geladen.")
+    return jm
+
+
 JITTER_MODEL_HEATMAPS_DIR = RUN_DIR / "heatmaps_jitter_model"
 plot_dir_3d_jitter = (
     keras_xai_root
@@ -1760,7 +1926,7 @@ for dataset_id in DATASETS:
     vol = load_volume(str(t1_path))
     x = np.expand_dims(vol, 0)
     y_pred = float(np.squeeze(jitter_model_3d.predict(x, verbose=0)))
-    R_masked = mask_explanation(vol, jitter_lrp_3d(x)[0].numpy())
+    R = jitter_lrp_3d(x)[0].numpy()
 
     hm_path = (
         JITTER_MODEL_HEATMAPS_DIR
@@ -1768,7 +1934,7 @@ for dataset_id in DATASETS:
         / sid
         / f"lrp_heatmap_jitter_model_{dataset_id}_{sid}.nii.gz"
     )
-    save_heatmap_nifti(R_masked, str(t1_path), hm_path)
+    save_heatmap_nifti(R, str(t1_path), hm_path)
     print(
         f"\n[{dataset_id}] Jitter-Modell 3D für erstes Subject: {sid}  "
         f"true={y_true:.1f}  pred={y_pred:.1f}"
@@ -1779,7 +1945,7 @@ for dataset_id in DATASETS:
         dataset_id=dataset_id,
         subject_id=sid,
         volume=_load_vol(t1_path),
-        heatmap=R_masked,
+        heatmap=R,
         left_mask=_load_vol(left_path),
         right_mask=_load_vol(right_path),
         y_true=y_true,
@@ -1859,32 +2025,6 @@ LAYERWISE_OUT_DIR = (
     / "layerwise_relevance"
 )
 LAYERWISE_OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _ensure_jitter_model():
-    """B.1 legt `jitter_model` an; falls noch nicht gelaufen, hier nachladen."""
-    if "jitter_model" in globals() and globals()["jitter_model"] is not None:
-        return globals()["jitter_model"]
-    run_dir = Path(
-        "~/data/nn-trainings/mri/Right-Whole_thalamus/"
-        "training_run_05h09m52s_04sep2026"
-    ).expanduser().resolve()
-    model_path = run_dir / "model.keras"
-    config_path = run_dir / "config.yaml"
-    if not model_path.is_file():
-        raise FileNotFoundError(f"Jitter-Modell fehlt: {model_path}")
-    jcfg = OmegaConf.load(config_path)
-    with open_dict(jcfg):
-        jcfg.paths.csv_dir = str(run_dir)
-        if "prediction" not in jcfg.training:
-            jcfg.training.prediction = {}
-        jcfg.training.prediction.batch_size = int(PRED_BATCH_SIZE)
-    jm = _build_single_device_model(jcfg)
-    w0 = jm.get_weights()[0].copy()
-    jm.load_weights(str(model_path))
-    if float(np.mean(np.abs(jm.get_weights()[0] - w0))) < 1e-9:
-        raise RuntimeError("Jitter-Modell-Gewichte wurden nicht geladen.")
-    return jm
 
 
 def find_backward_start(lrp_model) -> int:
