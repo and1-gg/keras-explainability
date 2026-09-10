@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -30,19 +30,24 @@
 # 7. Interaktiver 3D-Plot (Gehirn + beide Thalamus-Masken + unnormierte LRP)
 #    für das **erste** Subject von IXI und UKB
 #
-# **Teil B — Jitter-/Simulations-Framework** (nur UKB, außer B.5):
+# **Teil B — Gejitterte UKB-Volumes** (`UKB_JITTERED_PREDICT_TSV`):
 #
-# 1. True vs. Predicted mit dem auf gejitterten Volumes trainierten Modell
-# 2. Intensitäts-QC (3D + Histogramm) des ersten gejitterten UKB-Holdout-Subjects
+# Inputs: `T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`
+# (rechter Thalamus erhalten, Rest permutiert) — **nicht** `cropped.nii.gz`.
+#
+# 1. True vs. Predicted mit dem Jitter-Modell
+# 2. Intensitäts-QC des ersten gejitterten Holdout-Subjects
 # 3. QC der gejitterten Volumes (Nicht-Holdout)
 # 4. LRP-Heatmaps auf gejitterten Holdout-Volumes (Original-Modell)
-# 5. Interaktiver 3D-Plot der Jitter-Modell-LRP (erstes Subject IXI + UKB)
+# 5. Interaktiver 3D-Plot (Jitter-Modell auf gejittertem Volume)
 #
-# **Teil C — Relevanzerhaltung Schicht für Schicht:**
+# **Teil C — Relevanzerhaltung Schicht für Schicht** (gejitterte Volumes)
 #
-# Für das **erste** Holdout-Subject jedes Datensatzes in `DATASET_DIRS` die Summe der
-# LRP-Relevanz pro Schicht (Original-Modell vs. Jitter-Modell), inkl. Layer-Labels
-# (`conv` / `maxpool` / `gap` / `dense`).
+# **Teil D — All-zero außer rechter Thalamus** (`UKB_ALL_ZERO_PREDICT_TSV`):
+#
+# Wie Teil B, aber Inputs `<subject-id>_right_thalamus_cropped.nii.gz`
+# (alles außer rechtem Thalamus = 0).
+#
 
 # %% [markdown]
 # ## A.1. Imports
@@ -100,6 +105,16 @@ UKB_HOLDOUT_PREDICT_TSV = Path(
     "right_whole_thalamus/predict.tsv"
 ).expanduser().resolve()
 
+# Modifizierte UKB-Holdout-Volumes (gleiche Subjects, andere filepaths):
+UKB_JITTERED_PREDICT_TSV = Path(
+    "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
+    "right_whole_thalamus/jittered_data/predict.tsv"
+).resolve()
+UKB_ALL_ZERO_PREDICT_TSV = Path(
+    "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
+    "right_whole_thalamus/all_zero_except_right_thalamus/predict.tsv"
+).resolve()
+
 MNI152_1MM = Path("/usr/local/fsl/data/standard/MNI152_T1_1mm.nii.gz")
 MODEL_PATH = RUN_DIR / "model.keras"
 CONFIG_PATH = RUN_DIR / "config.yaml"
@@ -115,6 +130,9 @@ for p, name in (
     (MODEL_PATH, "Modell"),
     (CONFIG_PATH, "Config"),
     (MNI152_1MM, "MNI152-Referenz"),
+    (UKB_HOLDOUT_PREDICT_TSV, "UKB Holdout predict.tsv"),
+    (UKB_JITTERED_PREDICT_TSV, "UKB Jittered predict.tsv"),
+    (UKB_ALL_ZERO_PREDICT_TSV, "UKB all-zero-except-right-thalamus predict.tsv"),
 ):
     if not p.is_file():
         raise FileNotFoundError(f"{name} fehlt: {p}")
@@ -123,6 +141,9 @@ print(f"RUN_DIR:          {RUN_DIR}")
 print(f"DATASETS:         {DATASETS}")
 print(f"N_SUBJECTS:       {N_SUBJECTS}")
 print(f"N_PLOT_SUBJECTS:  {N_PLOT_SUBJECTS}")
+print(f"UKB holdout TSV:  {UKB_HOLDOUT_PREDICT_TSV}")
+print(f"UKB jittered TSV: {UKB_JITTERED_PREDICT_TSV}")
+print(f"UKB all-zero TSV: {UKB_ALL_ZERO_PREDICT_TSV}")
 
 
 # %% [markdown]
@@ -339,6 +360,8 @@ lrp = LRP(model, layer=len(model.layers) - 1, idx=0, strategy=strategy)
 
 
 def save_heatmap_nifti(explanation: np.ndarray, reference_nii_path: str, out_path: Path) -> None:
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     ref = nib.load(reference_nii_path)
     data = np.asarray(explanation, dtype=np.float32).squeeze()
     if data.shape != ref.shape:
@@ -1443,21 +1466,22 @@ for dataset_id in DATASETS:
     )
 
 # %% [markdown]
-# ## B.1. True vs. Predicted (jittered model)
+# ## B.1. True vs. Predicted (jittered model auf gejitterten Volumes)
 #
-# Scatter und Pearson-r / MAE für die **`N_SUBJECTS` UKB-Holdout-Subjects** — diesmal mit dem
-# auf **gejitterten** Volumes trainierten Modell
+# Scatter und Pearson-r / MAE für die **`N_SUBJECTS` UKB-Holdout-Subjects** aus
+# `UKB_JITTERED_PREDICT_TSV`, mit dem auf **gejitterten** Volumes trainierten Modell
 #
 # ```
 # /mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/
 #     training_run_05h09m52s_04sep2026
 # ```
 #
-# (Training: `jittered_data/.../T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`;
-# Holdout-Predict wie in Teil A auf den originalen `cropped.nii.gz`).
+# **Input:** `T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz` (filepaths aus der
+# Jitter-`predict.tsv`) — **nicht** die originalen `cropped.nii.gz`.
 #
-# Vergleichspunkt zu **A.8** (Original-Modell auf denselben Holdout-Fällen).
+# Vergleichspunkt zu **A.8** (Original-Modell auf ungejittertem Holdout).
 # Danach folgt **B.2** (Intensitäts-QC des ersten gejitterten Holdout-Subjects).
+#
 
 # %%
 JITTER_MODEL_RUN_DIR = Path(
@@ -1490,10 +1514,21 @@ if jitter_delta < 1e-9:
 print(f"JITTER_MODEL_RUN_DIR: {JITTER_MODEL_RUN_DIR}")
 print(f"Gewichtsdelta (jittered model): {jitter_delta:.3g}")
 
-# Dieselben UKB-Holdout-Subjects wie in Teil A (dataset_labels["ukb"]).
-df_ukb = dataset_labels["ukb"]
+# Gejitterte Holdout-Volumes aus der offiziellen Jitter-predict.tsv
+dataset_labels_jittered: dict[str, pd.DataFrame] = {
+    "ukb": load_dataset_labels(
+        DATASET_DIRS["ukb"],
+        pred_var,
+        N_SUBJECTS,
+        labels_file=UKB_JITTERED_PREDICT_TSV,
+    )
+}
+df_ukb_jittered = dataset_labels_jittered["ukb"]
+print(f"[B.1] n={len(df_ukb_jittered)}  TSV={UKB_JITTERED_PREDICT_TSV}")
+print("Erstes Volume:", df_ukb_jittered.iloc[0]["filepath"])
+
 jitter_model_rows: list[dict[str, object]] = []
-for _, row in tqdm(df_ukb.iterrows(), total=len(df_ukb), desc="ukb-jitter-model"):
+for _, row in tqdm(df_ukb_jittered.iterrows(), total=len(df_ukb_jittered), desc="ukb-jitter-model"):
     sid = str(row["participant_id"])
     path = str(row["filepath"])
     y_true = float(row[pred_var])
@@ -1503,7 +1538,7 @@ for _, row in tqdm(df_ukb.iterrows(), total=len(df_ukb), desc="ukb-jitter-model"
     vol = load_volume(path)
     y_pred = float(np.squeeze(jitter_model.predict(np.expand_dims(vol, 0), verbose=0)))
     jitter_model_rows.append(
-        {"subject_id": sid, pred_var: y_true, "prediction": y_pred}
+        {"subject_id": sid, pred_var: y_true, "prediction": y_pred, "filepath": path}
     )
 
 if not jitter_model_rows:
@@ -1514,7 +1549,7 @@ y_true = jitter_preds_df[pred_var].astype(float).to_numpy()
 y_pred = jitter_preds_df["prediction"].astype(float).to_numpy()
 r_val, _ = pearsonr(y_true, y_pred) if len(jitter_preds_df) >= 2 else (np.nan, None)
 mae = float(np.mean(np.abs(y_true - y_pred)))
-print(f"[ukb | jittered model] n={len(jitter_preds_df)}  r={r_val:.3f}  MAE={mae:.1f}")
+print(f"[ukb | jittered model @ jittered vols] n={len(jitter_preds_df)}  r={r_val:.3f}  MAE={mae:.1f}")
 display(jitter_preds_df[["subject_id", pred_var, "prediction"]].round(1))
 
 fig, ax = plt.subplots(figsize=(4.5, 4.5))
@@ -1523,13 +1558,13 @@ lo = float(min(y_true.min(), y_pred.min()))
 hi = float(max(y_true.max(), y_pred.max()))
 ax.plot([lo, hi], [lo, hi], "k--", lw=1)
 ax.set_xlabel(f"true {pred_var}")
-ax.set_ylabel("prediction (jittered model)")
+ax.set_ylabel("prediction (jittered model @ jittered vols)")
 ax.set_title(f"ukb  jittered model  r={r_val:.3f}  MAE={mae:.1f}")
 ax.set_aspect("equal", adjustable="box")
 fig.tight_layout()
 scatter_path = (
     JITTER_MODEL_RUN_DIR
-    / f"scatter_true_vs_pred_ukb_holdout_n{len(jitter_preds_df)}.png"
+    / f"scatter_true_vs_pred_ukb_jittered_vols_n{len(jitter_preds_df)}.png"
 )
 fig.savefig(scatter_path, dpi=110)
 print("gespeichert:", scatter_path)
@@ -1537,25 +1572,28 @@ if SHOW_PLOTS_INLINE:
     display(fig)
 plt.close(fig)
 
+
 # %% [markdown]
 # ## B.2. Intensitäts-QC — erstes UKB-Holdout-Subject (gejittert)
 #
-# Analog zu **A.9**, aber für das **erste** UKB-Holdout-Subject und das gejitterte
-# Volume
-# `T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`
-# (rechter Thalamus erhalten, Rest permutiert).
+# Analog zu **A.9**, für das **erste** Subject aus `UKB_JITTERED_PREDICT_TSV`
+# (`T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`).
 # min/max, Histogramm (40 Bins, nur `x≠0`) und 3D-Intensitätsplot.
 # Nutzt `plot_volume_intensity_qc` aus A.9.
+#
 
 # %%
-_JITTER_ROOT_B2 = Path("/mnt/users/andreasre/data/jittered_data")
-_JITTER_FILE_B2 = "T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz"
+# Erstes Subject aus UKB_JITTERED_PREDICT_TSV (Pfad aus der TSV).
+if "dataset_labels_jittered" not in globals():
+    dataset_labels_jittered = {
+        "ukb": load_dataset_labels(
+            DATASET_DIRS["ukb"], pred_var, N_SUBJECTS, labels_file=UKB_JITTERED_PREDICT_TSV
+        )
+    }
 
-_row_ukb0 = dataset_labels["ukb"].iloc[0]
+_row_ukb0 = dataset_labels_jittered["ukb"].iloc[0]
 _sid_ukb0 = str(_row_ukb0["participant_id"])
-_jitter_path0 = (
-    _JITTER_ROOT_B2 / "ukb" / "recon" / _sid_ukb0 / "mri" / _JITTER_FILE_B2
-)
+_jitter_path0 = Path(str(_row_ukb0["filepath"]))
 if not _jitter_path0.is_file():
     raise FileNotFoundError(
         f"[ukb/{_sid_ukb0}] gejittertes Volume fehlt: {_jitter_path0}"
@@ -1570,6 +1608,8 @@ plot_volume_intensity_qc(
     n_bins=40,
     show_inline=SHOW_PLOTS_INLINE,
 )
+print("Volume:", _jitter_path0)
+
 
 # %% [markdown]
 # ## B.3. QC der gejitterten UKB-Volumes (Nicht-Holdout)
@@ -1577,7 +1617,7 @@ plot_volume_intensity_qc(
 # Sanity-Check für das **Simulations-/Jitter-Framework**: In den Dateien
 #
 # ```
-# /mnt/users/andreasre/data/jittered_data/ukb/recon/<subject-id>/mri/
+# /mnt/users/andreasre/data/mri-scans/jittered_data/ukb/recon/<subject-id>/mri/
 #     T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz
 # ```
 #
@@ -1598,10 +1638,11 @@ plot_volume_intensity_qc(
 # 3. Numerischer QC: Pearson-r zwischen Original (`cropped.nii.gz`) und gejittertem Volume,
 #    getrennt **innerhalb** der rechten Thalamus-Maske (erwartet ≈ 1.0) und **außerhalb**
 #    im übrigen Gehirn (erwartet ≪ 1.0).
+#
 
 # %%
 # --- Jitter-Konfiguration (nur ukb) --------------------------------------
-JITTER_ROOT = Path("/mnt/users/andreasre/data/jittered_data")
+JITTER_ROOT = Path("/mnt/users/andreasre/data/mri-scans/jittered_data")
 JITTER_DATASET = "ukb"
 JITTER_FILENAME = "T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz"
 JITTER_MASK_LEFT_NAME = "aseg_mni152_left_thalamus_cropped.nii.gz"
@@ -1821,37 +1862,31 @@ for sid in jitter_qc_subjects:
 
 display(pd.DataFrame(qc_rows))
 
+
 # %% [markdown]
 # ## B.4. LRP-Heatmaps für die gejitterten UKB-Holdout-Volumes
 #
-# Identisch zu **Abschnitt A.7**, nur ist der Input jetzt das gejitterte Volume
+# Identisch zu **Abschnitt A.7**, Inputs aus `UKB_JITTERED_PREDICT_TSV`
+# (`T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`) für **`N_SUBJECTS`**
+# Holdout-Subjects. FOV bereits `167×212×160`.
+#
+# Pro Subject: Vorhersage → LRP **jedes Mal neu berechnen** (keine alten Heatmaps laden)
+# → speichern als `heatmap_mni152.nii.gz` **im gleichen `mri/`-Ordner** wie das
+# Predict-Volume (Pfad aus der TSV), z. B.
 #
 # ```
-# /mnt/users/andreasre/data/jittered_data/ukb/recon/<subject-id>/mri/
-#     T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz
+# ~/data/mri-scans/jittered_data/.../ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
 # ```
 #
-# für **dieselben `N_SUBJECTS` UKB-Holdout-Subjects** wie oben (`dataset_labels["ukb"]`).
-# Die Dateien haben schon das Training-FOV `167×212×160`, es wird also nicht neu gecropped.
+# → Overlay (Schnitte wie A.7). Masken: neben dem Jitter-Volume, sonst Fallback aus A.7.
 #
-# Pro Subject: Vorhersage → LRP → Heatmap als NIfTI unter
-# `RUN_DIR/heatmaps_jittered/ukb/<subject-id>/` → Overlay-Plot mit denselben Schnitten
-# (sagittal `x=70`, koronal `y=104`, axial `z=78`), LRP **unnormiert**, rechter Thalamus grün,
-# linker Thalamus lila. Thalamus-Masken kommen aus dem Jitter-Ordner, sonst als Fallback
-# aus den in Abschnitt A.7 erzeugten Masken (identische Anatomie, `flirt` läuft nicht erneut).
+# Auswertung: `pred_original` (A.7 auf `cropped.nii.gz`) vs. `pred_jittered` sowie
+# `|R|`-Anteil im rechten Thalamus.
 #
-# Auswertung am Ende: `pred_original` vs. `pred_jittered` sowie der Anteil von \(|R|\)
-# im rechten Thalamus. Erwartung, wenn das Modell wirklich das rechte Thalamus-Volumen liest:
-# Vorhersage bleibt stabil und der Relevanz-Anteil im rechten Thalamus steigt, weil das
-# permutierte Umfeld keine nutzbare Struktur mehr trägt.
-#
-# Voraussetzungen: Abschnitte 1–7 gelaufen (`model`, `lrp`, `dataset_labels`, `plot_lrp_overlay`)
-# sowie Abschnitt B.3 (Jitter-Pfad-Helfer). Fehlende Jitter-Dateien werden übersprungen und
-# am Ende aufgelistet.
 
 # %%
-JITTER_HEATMAPS_DIR = RUN_DIR / "heatmaps_jittered" / JITTER_DATASET
 N_PLOT_JITTER_SUBJECTS = int(N_SUBJECTS)  # alle Holdout-Subjects plotten
+HEATMAP_NIFTI_NAME = "heatmap_mni152.nii.gz"
 
 jitter_plot_dir = (
     keras_xai_root
@@ -1897,29 +1932,44 @@ jitter_saved_niftis: list[Path] = []
 jitter_rows: list[dict[str, object]] = []
 jitter_missing: list[str] = []
 
-df_jitter = dataset_labels[JITTER_DATASET]
-print(f"=== {JITTER_DATASET} (gejittert): n={len(df_jitter)} Holdout-Subjects ===")
+if "dataset_labels_jittered" not in globals():
+    dataset_labels_jittered = {
+        "ukb": load_dataset_labels(
+            DATASET_DIRS["ukb"], pred_var, N_SUBJECTS, labels_file=UKB_JITTERED_PREDICT_TSV
+        )
+    }
+df_jitter = dataset_labels_jittered[JITTER_DATASET]
+print(
+    f"=== {JITTER_DATASET} (gejittert): n={len(df_jitter)} Holdout-Subjects ===\n"
+    f"TSV: {UKB_JITTERED_PREDICT_TSV}\n"
+    f"Heatmaps: jeweils neu via LRP → <volume_dir>/{HEATMAP_NIFTI_NAME}"
+)
 
 for i, (_, row) in enumerate(
     tqdm(df_jitter.iterrows(), total=len(df_jitter), desc=f"{JITTER_DATASET}-jittered")
 ):
     sid = str(row["participant_id"])
     y_true = float(row[pred_var])
-    jitter_path = jitter_volume_path(sid)
+    jitter_path = Path(str(row["filepath"]))
     if not jitter_path.is_file():
         jitter_missing.append(f"[{JITTER_DATASET}/{sid}] Jitter-Volume fehlt: {jitter_path}")
         continue
 
+    # LRP immer neu berechnen — keine alten Heatmaps laden.
     vol = load_volume(str(jitter_path))
     y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
     R = lrp(np.expand_dims(vol, 0))[0].numpy()
 
-    nii_path = JITTER_HEATMAPS_DIR / sid / f"lrp_heatmap_{JITTER_DATASET}_jittered_{sid}.nii.gz"
-    nii_path.parent.mkdir(parents=True, exist_ok=True)
+    nii_path = jitter_path.parent / HEATMAP_NIFTI_NAME
     save_heatmap_nifti(R, str(jitter_path), nii_path)
     jitter_saved_niftis.append(nii_path)
 
     left_path, right_path = jitter_mask_paths(sid)
+    jit_mri = jitter_path.parent
+    if (jit_mri / JITTER_MASK_LEFT_NAME).is_file():
+        left_path = jit_mri / JITTER_MASK_LEFT_NAME
+    if (jit_mri / JITTER_MASK_RIGHT_NAME).is_file():
+        right_path = jit_mri / JITTER_MASK_RIGHT_NAME
     left_data = _load_jitter_nii(left_path) if left_path.is_file() else None
     right_data = _load_jitter_nii(right_path) if right_path.is_file() else None
     if right_data is None:
@@ -1933,6 +1983,7 @@ for i, (_, row) in enumerate(
             "pred_original": y_pred_orig,
             "pred_jittered": y_pred,
             "delta_pred": None if y_pred_orig is None else y_pred - y_pred_orig,
+            "heatmap_path": str(nii_path),
             "right_share_original": (
                 float("nan") if right_data is None else _original_right_share(sid, right_data)
             ),
@@ -1958,9 +2009,14 @@ for i, (_, row) in enumerate(
             axial_z=JITTER_AXIAL_Z,
         )
 
-print(f"\nJitter-Heatmaps: {len(jitter_saved_niftis)}  |  übersprungen/Warnungen: {len(jitter_missing)}")
+print(
+    f"\nJitter-Heatmaps neu geschrieben: {len(jitter_saved_niftis)}  |  "
+    f"übersprungen/Warnungen: {len(jitter_missing)}"
+)
 for m in jitter_missing:
     print(" -", m)
+if jitter_saved_niftis:
+    print("Beispiel:", jitter_saved_niftis[0])
 
 if jitter_rows:
     jitter_df = pd.DataFrame(jitter_rows)
@@ -1969,19 +2025,16 @@ if jitter_rows:
         mae_shift = float(np.mean(np.abs(jitter_df["delta_pred"].dropna().to_numpy())))
         print(f"mittlere |pred_jittered - pred_original|: {mae_shift:.1f}")
 
+
 # %% [markdown]
-# ## B.5. Interaktiver 3D-Plot — Jitter-Modell (erstes Subject je Dataset)
+# ## B.5. Interaktiver 3D-Plot — Jitter-Modell (gejittertes UKB-Volume)
 #
-# Analog zu **A.11**, aber die LRP-Heatmap kommt vom **auf gejitterten Volumes
-# trainierten Modell** (`training_run_05h09m52s_04sep2026`). Input sind weiterhin die
-# originalen Holdout-`cropped.nii.gz` (wie in B.1 / Teil C), Thalamus-Masken aus A.7.
+# Analog zu **A.11**, LRP vom **Jitter-Modell**. Input: erstes Subject aus
+# `UKB_JITTERED_PREDICT_TSV` (`T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz`).
+# Thalamus-Masken aus A.7 (gleiche Subject-ID).
 #
-# Pro Dataset das **erste** Subject: Vorhersage → LRP → NIfTI unter
-# `RUN_DIR/heatmaps_jitter_model/<dataset>/<subject-id>/` → interaktives HTML
-# (Gehirnkontur + beide FreeSurfer-Masken + unnormierte LRP).
+# Heatmap als `heatmap_mni152_jitter_model.nii.gz` neben dem Predict-Volume (überschreibt nicht die B.4-`heatmap_mni152.nii.gz` vom Original-Modell).
 #
-# Voraussetzungen: A.4–A.7 (Labels, Loader, Masken), A.11 (`plot_thalamus_lrp_3d`).
-# `_ensure_jitter_model` (unten) nutzt `jitter_model` aus B.1 oder lädt nach.
 
 # %%
 def _ensure_jitter_model():
@@ -2010,7 +2063,6 @@ def _ensure_jitter_model():
     return jm
 
 
-JITTER_MODEL_HEATMAPS_DIR = RUN_DIR / "heatmaps_jitter_model"
 plot_dir_3d_jitter = (
     keras_xai_root
     / "output"
@@ -2018,6 +2070,13 @@ plot_dir_3d_jitter = (
     / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
 )
 plot_dir_3d_jitter.mkdir(parents=True, exist_ok=True)
+
+if "dataset_labels_jittered" not in globals():
+    dataset_labels_jittered = {
+        "ukb": load_dataset_labels(
+            DATASET_DIRS["ukb"], pred_var, N_SUBJECTS, labels_file=UKB_JITTERED_PREDICT_TSV
+        )
+    }
 
 jitter_model_3d = _ensure_jitter_model()
 jitter_lrp_3d = LRP(
@@ -2027,43 +2086,40 @@ jitter_lrp_3d = LRP(
     strategy=strategy,
 )
 
-for dataset_id in DATASETS:
-    df = dataset_labels[dataset_id]
-    if df.empty:
-        print(f"[{dataset_id}] keine Subjects.")
-        continue
-
-    row = df.iloc[0]
-    sid = str(row["participant_id"])
-    y_true = float(row[pred_var])
-    t1_path = Path(str(row["filepath"]))
-    mask_dir = RUN_DIR / "heatmaps" / dataset_id / sid
+dataset_id = "ukb"
+df = dataset_labels_jittered[dataset_id]
+row = df.iloc[0]
+sid = str(row["participant_id"])
+y_true = float(row[pred_var])
+t1_path = Path(str(row["filepath"]))
+jit_mri = t1_path.parent
+left_path = jit_mri / "aseg_mni152_left_thalamus_cropped.nii.gz"
+right_path = jit_mri / "aseg_mni152_right_thalamus_cropped.nii.gz"
+mask_dir = RUN_DIR / "heatmaps" / dataset_id / sid
+if not left_path.is_file():
     left_path = mask_dir / "aseg_mni152_left_thalamus_cropped.nii.gz"
+if not right_path.is_file():
     right_path = mask_dir / "aseg_mni152_right_thalamus_cropped.nii.gz"
 
-    missing = [p for p in (t1_path, left_path, right_path) if not p.is_file()]
-    if missing:
-        print(f"[{dataset_id}/{sid}] Dateien fehlen:")
-        for p in missing:
-            print("  -", p)
-        continue
-
+missing = [p for p in (t1_path, left_path, right_path) if not p.is_file()]
+if missing:
+    print(f"[{dataset_id}/{sid}] Dateien fehlen:")
+    for p in missing:
+        print("  -", p)
+else:
     vol = load_volume(str(t1_path))
     x = np.expand_dims(vol, 0)
     y_pred = float(np.squeeze(jitter_model_3d.predict(x, verbose=0)))
     R = jitter_lrp_3d(x)[0].numpy()
 
-    hm_path = (
-        JITTER_MODEL_HEATMAPS_DIR
-        / dataset_id
-        / sid
-        / f"lrp_heatmap_jitter_model_{dataset_id}_{sid}.nii.gz"
-    )
+    # neben dem Predict-Volume speichern (Ordner existiert bereits)
+    hm_path = t1_path.parent / "heatmap_mni152_jitter_model.nii.gz"
     save_heatmap_nifti(R, str(t1_path), hm_path)
     print(
-        f"\n[{dataset_id}] Jitter-Modell 3D für erstes Subject: {sid}  "
+        f"\n[{dataset_id}] Jitter-Modell 3D (gejittertes Volume): {sid}  "
         f"true={y_true:.1f}  pred={y_pred:.1f}"
     )
+    print("Volume:", t1_path)
     print("Heatmap:", hm_path)
 
     plot_thalamus_lrp_3d(
@@ -2076,15 +2132,16 @@ for dataset_id in DATASETS:
         y_true=y_true,
         y_pred=y_pred,
         pred_var_name=pred_var,
-        title_suffix="Jitter-Modell",
+        title_suffix="Jitter-Modell @ gejittert",
         save_html=(
             plot_dir_3d_jitter
-            / f"{dataset_id}_{sid}_thalamus_lrp_3d_jitter_model.html"
+            / f"{dataset_id}_{sid}_thalamus_lrp_3d_jitter_model_jittered_vol.html"
         ),
     )
 
+
 # %% [markdown]
-# ## C. Relevanzerhaltung Schicht für Schicht
+# ## C. Relevanzerhaltung Schicht für Schicht (gejitterte UKB-Volumes)
 #
 # ### Motivation
 #
@@ -2110,11 +2167,12 @@ for dataset_id in DATASETS:
 # * Bias-Behandlung und Pooling-Strategien
 # * echten Implementierungsfehlern (dann oft Größenordnungs-Sprünge)
 #
-# Dieser Abschnitt misst $\sum R$ **pro LRP-Schicht** für das **erste** Subject aus
-# `dataset_labels` je Eintrag in `DATASETS` / `DATASET_DIRS` — einmal mit dem
-# **Original-Modell** (Teil A) und einmal mit dem **auf gejitterten Volumes trainierten
-# Modell** (Teil B). Die Inputs sind jeweils die Holdout-`filepath`s aus Teil A
-# (originales `cropped.nii.gz`), damit der Modellvergleich fair bleibt.
+# ### Daten
+#
+# UKB-Holdout aus `UKB_JITTERED_PREDICT_TSV`
+# (`…/right_whole_thalamus/jittered_data/predict.tsv`): rechter Thalamus erhalten,
+# übriges Gehirn voxelweise permutiert. Es wird das **erste** Subject dieser Liste
+# verwendet.
 #
 # Dargestellt werden die **gewichtstragenden / Pooling-Schichten** des Rückwärtspfads
 # (Dense, GlobalAveragePool, Conv3D, MaxPool), beschriftet mit dem Forward-Namen
@@ -2128,13 +2186,13 @@ for dataset_id in DATASETS:
 #   relative Sprung liegt oft am ε-Dense und ggf. an den flat-Convs nahe dem Input.
 # * **Original- vs. Jitter-Modell:** Absolute $\sum R$-Niveaus können differieren
 #   (andere Vorhersage $f(x)$), die *Form* der Erhaltungskurve sollte bei gleicher
-#   Composite-Strategie aber ähnlich sein. Deutlich andere Lecks würden auf
-#   Architektur-/Strategie-Unterschiede oder ein kaputtes Gewichteladen hinweisen.
-# * IXI vs. UKB: bei stabilem Explainer ähnliche Schichtprofile; starke
-#   Datensatz-Abhängigkeit der Lecks wäre ungewöhnlich und prüfenswert.
+#   Composite-Strategie aber ähnlich sein.
+# * Teil **D** wiederholt denselben Ablauf auf Volumes, in denen alles außer dem
+#   rechten Thalamus auf Null gesetzt ist.
 #
 # Die Code-Zelle druckt Bilanz (`Start` / `Ende` / Erhaltungsquote) und speichert Plots
-# unter `output/notebooks/.../layerwise_relevance/`.
+# unter `output/notebooks/.../layerwise_relevance/jittered/`.
+#
 
 # %%
 from tensorflow.keras import Model as KerasModel
@@ -2321,8 +2379,15 @@ def run_layerwise_for_model(
     tag: str,
     keras_model,
     lrp_strategy,
+    labels_by_dataset: dict[str, pd.DataFrame],
+    dataset_ids: list[str] | None = None,
+    out_dir: Path | None = None,
+    title_suffix: str = "",
 ) -> list[pd.DataFrame]:
     """Erstes Subject je Dataset: LRP bauen, ΣR sammeln, plotten."""
+    out = out_dir if out_dir is not None else LAYERWISE_OUT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    ids = list(dataset_ids) if dataset_ids is not None else list(labels_by_dataset)
     lrp_here = LRP(
         keras_model,
         layer=len(keras_model.layers) - 1,
@@ -2330,9 +2395,9 @@ def run_layerwise_for_model(
         strategy=lrp_strategy,
     )
     frames: list[pd.DataFrame] = []
-    for dataset_id in DATASETS:
-        df_labels = dataset_labels[dataset_id]
-        if df_labels.empty:
+    for dataset_id in ids:
+        df_labels = labels_by_dataset.get(dataset_id)
+        if df_labels is None or df_labels.empty:
             print(f"[{tag}/{dataset_id}] keine Labels.")
             continue
         row = df_labels.iloc[0]
@@ -2349,6 +2414,7 @@ def run_layerwise_for_model(
         print(
             f"\n=== [{tag}] {dataset_id}/{sid}  true={y_true:.1f}  pred={y_pred:.1f} ==="
         )
+        print(f"Volume: {path}")
 
         df = collect_layer_relevance(lrp_here, x, keras_model=keras_model)
         df.insert(0, "model_tag", tag)
@@ -2356,6 +2422,8 @@ def run_layerwise_for_model(
         df.insert(2, "subject_id", sid)
         df.insert(3, "y_true", y_true)
         df.insert(4, "y_pred", y_pred)
+        if title_suffix:
+            df.insert(5, "data_variant", title_suffix)
         frames.append(df)
 
         r0 = float(df["sum_R"].iloc[0])
@@ -2366,51 +2434,40 @@ def run_layerwise_for_model(
         ))
         print(f"Bilanz: Start={r0:.4f}  Ende={r1:.4f}  erhalten={kept:.2f}%")
 
-        csv_path = LAYERWISE_OUT_DIR / f"sum_R_{tag}_{dataset_id}_{sid}.csv"
+        csv_path = out / f"sum_R_{tag}_{dataset_id}_{sid}.csv"
         df.to_csv(csv_path, index=False)
         print("CSV:", csv_path)
 
+        suffix = f"  |  {title_suffix}" if title_suffix else ""
         plot_layerwise_sum_R(
             df,
             title=(
-                f"{tag}  |  {dataset_id}  {sid}\n"
+                f"{tag}  |  {dataset_id}  {sid}{suffix}\n"
                 f"true={y_true:.0f}  pred={y_pred:.0f}  |  "
                 f"ΣR start→end {r0:.3g}→{r1:.3g} ({kept:.1f}% erhalten)"
             ),
-            save_path=LAYERWISE_OUT_DIR / f"sum_R_{tag}_{dataset_id}_{sid}.png",
+            save_path=out / f"sum_R_{tag}_{dataset_id}_{sid}.png",
             show_inline=SHOW_PLOTS_INLINE,
         )
     return frames
 
 
-# Dieselbe Composite-Strategie wie in A.5.
-layerwise_strategy = strategy
-
-print("Teil C — Original-Modell (A)")
-frames_a = run_layerwise_for_model(
-    tag="A_original_model",
-    keras_model=model,
-    lrp_strategy=layerwise_strategy,
-)
-
-print("\nTeil C — Jitter-Modell (B)")
-jitter_model_c = _ensure_jitter_model()
-frames_b = run_layerwise_for_model(
-    tag="B_jittered_model",
-    keras_model=jitter_model_c,
-    lrp_strategy=layerwise_strategy,
-)
-
-all_frames = frames_a + frames_b
-if all_frames:
-    summary = pd.concat(all_frames, ignore_index=True)
-    summary_path = LAYERWISE_OUT_DIR / "sum_R_all_models_datasets.csv"
+def _summarize_layerwise_frames(
+    frames: list[pd.DataFrame],
+    *,
+    out_dir: Path,
+    prefix: str,
+) -> None:
+    if not frames:
+        print(f"[{prefix}] keine Frames.")
+        return
+    summary = pd.concat(frames, ignore_index=True)
+    summary_path = out_dir / f"sum_R_{prefix}_all_models.csv"
     summary.to_csv(summary_path, index=False)
     print("\nGesamttabelle:", summary_path)
 
-    # Kompakter Vergleich: Erhaltungsquote je Modell × Dataset
     cmp_rows = []
-    for fr in all_frames:
+    for fr in frames:
         r0 = float(fr["sum_R"].iloc[0])
         r1 = float(fr["sum_R"].iloc[-1])
         cmp_rows.append(
@@ -2426,14 +2483,62 @@ if all_frames:
         )
     cmp_df = pd.DataFrame(cmp_rows)
     display(cmp_df.round(3))
-    cmp_df.to_csv(LAYERWISE_OUT_DIR / "sum_R_conservation_summary.csv", index=False)
+    cmp_df.to_csv(out_dir / f"sum_R_{prefix}_conservation_summary.csv", index=False)
+
+
+layerwise_strategy = strategy
+
+LAYERWISE_JITTERED_DIR = LAYERWISE_OUT_DIR / "jittered"
+LAYERWISE_JITTERED_DIR.mkdir(parents=True, exist_ok=True)
+
+if "dataset_labels_jittered" not in globals():
+    dataset_labels_jittered = {
+        "ukb": load_dataset_labels(
+            DATASET_DIRS["ukb"], pred_var, N_SUBJECTS, labels_file=UKB_JITTERED_PREDICT_TSV
+        )
+    }
+print(
+    f"[C] gejitterte UKB-Labels: n={len(dataset_labels_jittered['ukb'])}  "
+    f"({UKB_JITTERED_PREDICT_TSV})"
+)
+print("Erstes Volume:", dataset_labels_jittered["ukb"].iloc[0]["filepath"])
+
+print("\nTeil C — Original-Modell (A) auf gejitterten Volumes")
+frames_c_a = run_layerwise_for_model(
+    tag="A_original_model",
+    keras_model=model,
+    lrp_strategy=layerwise_strategy,
+    labels_by_dataset=dataset_labels_jittered,
+    dataset_ids=["ukb"],
+    out_dir=LAYERWISE_JITTERED_DIR,
+    title_suffix="jittered",
+)
+
+print("\nTeil C — Jitter-Modell (B) auf gejitterten Volumes")
+jitter_model_c = _ensure_jitter_model()
+frames_c_b = run_layerwise_for_model(
+    tag="B_jittered_model",
+    keras_model=jitter_model_c,
+    lrp_strategy=layerwise_strategy,
+    labels_by_dataset=dataset_labels_jittered,
+    dataset_ids=["ukb"],
+    out_dir=LAYERWISE_JITTERED_DIR,
+    title_suffix="jittered",
+)
+
+_summarize_layerwise_frames(
+    frames_c_a + frames_c_b,
+    out_dir=LAYERWISE_JITTERED_DIR,
+    prefix="C_jittered",
+)
+
 
 # %% [markdown]
 # ## C. Nachlese der Plots
 #
-# Nach dem Lauf der Code-Zelle oben solltest du pro Modell × Dataset einen Plot und eine
-# CSV unter `output/notebooks/analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction/layerwise_relevance/`
-# haben.
+# Nach dem Lauf der Code-Zelle oben solltest du pro Modell einen Plot und eine CSV unter
+# `output/notebooks/analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction/layerwise_relevance/jittered/`
+# haben (Input: gejitterte UKB-Volumes aus `UKB_JITTERED_PREDICT_TSV`).
 #
 # **So liest du die Abbildung:**
 #
@@ -2452,3 +2557,461 @@ if all_frames:
 # * Vergleich **A_original_model** vs. **B_jittered_model**: ähnliche Kurvenform bei
 #   gleichem Explainer spricht dafür, dass beide Modelle denselben LRP-Pfad korrekt
 #   durchlaufen — Unterschiede in der *Höhe* folgen aus unterschiedlichen $f(x)$.
+#
+
+# %% [markdown]
+# ## D. All-zero außer rechter Thalamus
+#
+# Wie **Teil B**, aber mit Volumes aus `UKB_ALL_ZERO_PREDICT_TSV`: alle Hirnregionen
+# außer dem rechten Thalamus sind auf Null
+# (`<subject-id>_right_thalamus_cropped.nii.gz`).
+#
+# Vorhersagen und LRP laufen auf diesen transformierten Images — **nicht** auf
+# `cropped.nii.gz`.
+#
+
+# %% [markdown]
+# ## D.1. True vs. Predicted (jittered model auf all-zero Volumes)
+#
+# Analog zu **B.1**: Scatter / Pearson-r / MAE für `N_SUBJECTS` UKB-Holdout-Subjects
+# aus `UKB_ALL_ZERO_PREDICT_TSV`, mit dem **Jitter-Modell**.
+#
+
+# %%
+dataset_labels_all_zero: dict[str, pd.DataFrame] = {
+    "ukb": load_dataset_labels(
+        DATASET_DIRS["ukb"],
+        pred_var,
+        N_SUBJECTS,
+        labels_file=UKB_ALL_ZERO_PREDICT_TSV,
+    )
+}
+df_ukb_all_zero = dataset_labels_all_zero["ukb"]
+print(f"[D.1] n={len(df_ukb_all_zero)}  TSV={UKB_ALL_ZERO_PREDICT_TSV}")
+print("Erstes Volume:", df_ukb_all_zero.iloc[0]["filepath"])
+
+jitter_model_d1 = _ensure_jitter_model()
+all_zero_model_rows: list[dict[str, object]] = []
+for _, row in tqdm(
+    df_ukb_all_zero.iterrows(), total=len(df_ukb_all_zero), desc="ukb-all-zero-model"
+):
+    sid = str(row["participant_id"])
+    path = str(row["filepath"])
+    y_true = float(row[pred_var])
+    if not Path(path).is_file():
+        print(f"[ukb/{sid}] Volume fehlt: {path}")
+        continue
+    vol = load_volume(path)
+    y_pred = float(np.squeeze(jitter_model_d1.predict(np.expand_dims(vol, 0), verbose=0)))
+    all_zero_model_rows.append(
+        {"subject_id": sid, pred_var: y_true, "prediction": y_pred, "filepath": path}
+    )
+
+if not all_zero_model_rows:
+    raise RuntimeError("Keine Vorhersagen auf all-zero Volumes.")
+
+all_zero_preds_df = pd.DataFrame(all_zero_model_rows)
+y_true = all_zero_preds_df[pred_var].astype(float).to_numpy()
+y_pred = all_zero_preds_df["prediction"].astype(float).to_numpy()
+r_val, _ = pearsonr(y_true, y_pred) if len(all_zero_preds_df) >= 2 else (np.nan, None)
+mae = float(np.mean(np.abs(y_true - y_pred)))
+print(f"[ukb | jittered model @ all-zero] n={len(all_zero_preds_df)}  r={r_val:.3f}  MAE={mae:.1f}")
+display(all_zero_preds_df[["subject_id", pred_var, "prediction"]].round(1))
+
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+ax.scatter(y_true, y_pred, alpha=0.8)
+lo = float(min(y_true.min(), y_pred.min()))
+hi = float(max(y_true.max(), y_pred.max()))
+ax.plot([lo, hi], [lo, hi], "k--", lw=1)
+ax.set_xlabel(f"true {pred_var}")
+ax.set_ylabel("prediction (jittered model @ all-zero)")
+ax.set_title(f"ukb  all-zero  r={r_val:.3f}  MAE={mae:.1f}")
+ax.set_aspect("equal", adjustable="box")
+fig.tight_layout()
+scatter_path = (
+    JITTER_MODEL_RUN_DIR
+    / f"scatter_true_vs_pred_ukb_all_zero_vols_n{len(all_zero_preds_df)}.png"
+)
+fig.savefig(scatter_path, dpi=110)
+print("gespeichert:", scatter_path)
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+
+# %% [markdown]
+# ## D.2. Intensitäts-QC — erstes UKB-Holdout-Subject (all-zero)
+#
+# Analog zu **B.2** / **A.9** für das erste Subject aus `UKB_ALL_ZERO_PREDICT_TSV`.
+# Erwartung: Intensität ≈ 0 außerhalb des rechten Thalamus.
+#
+
+# %%
+_row_az0 = dataset_labels_all_zero["ukb"].iloc[0]
+_sid_az0 = str(_row_az0["participant_id"])
+_az_path0 = Path(str(_row_az0["filepath"]))
+if not _az_path0.is_file():
+    raise FileNotFoundError(f"[ukb/{_sid_az0}] all-zero Volume fehlt: {_az_path0}")
+
+_vol_az0 = np.asarray(nib.load(str(_az_path0)).get_fdata(), dtype=np.float32).squeeze()
+plot_volume_intensity_qc(
+    _vol_az0,
+    title=f"D.2  ukb  {_sid_az0}  all-zero-except-right-thalamus  ({_az_path0.name})",
+    n_bins=40,
+    show_inline=SHOW_PLOTS_INLINE,
+)
+print("Volume:", _az_path0)
+print(
+    f"nonzero voxels: {int(np.count_nonzero(_vol_az0))} / {_vol_az0.size}  "
+    f"({100.0 * np.count_nonzero(_vol_az0) / _vol_az0.size:.3f}%)"
+)
+
+
+# %% [markdown]
+# ## D.3. QC der all-zero UKB-Volumes (Nicht-Holdout)
+#
+# Analog zu **B.3**: zufällige Nicht-Holdout-Subjects unter
+# `/mnt/users/andreasre/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/`.
+#
+# Numerischer QC vs. Original-`cropped.nii.gz`: Korrelation **innerhalb** der rechten
+# Thalamus-Maske (≈ 1) und Anteil Nicht-Null-Voxel **außerhalb** (≈ 0).
+#
+
+# %%
+ALL_ZERO_ROOT = Path(
+    "/mnt/users/andreasre/data/mri-scans/only_brain_regions/right-thalamus"
+)
+ALL_ZERO_DATASET = "ukb"
+ALL_ZERO_RECON_DIR = ALL_ZERO_ROOT / ALL_ZERO_DATASET / "recon"
+N_ALL_ZERO_QC_SUBJECTS = 3
+ALL_ZERO_QC_SEED = 0
+
+if not ALL_ZERO_RECON_DIR.is_dir():
+    raise FileNotFoundError(f"all-zero Verzeichnis fehlt: {ALL_ZERO_RECON_DIR}")
+
+
+def all_zero_volume_path(subject_id: str) -> Path:
+    return (
+        ALL_ZERO_RECON_DIR
+        / subject_id
+        / "mri"
+        / f"{subject_id}_right_thalamus_cropped.nii.gz"
+    )
+
+
+def pick_all_zero_subjects(n: int, *, seed: int, exclude: set[str]) -> list[str]:
+    candidates = sorted(
+        p.name
+        for p in ALL_ZERO_RECON_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith(".") and p.name not in exclude
+    )
+    if not candidates:
+        raise FileNotFoundError(f"Keine Nicht-Holdout-Subjects in {ALL_ZERO_RECON_DIR}")
+    rng = np.random.default_rng(seed)
+    picked: list[str] = []
+    for idx in rng.permutation(len(candidates)):
+        sid = candidates[int(idx)]
+        if all_zero_volume_path(sid).is_file():
+            picked.append(sid)
+            if len(picked) >= int(n):
+                break
+    if len(picked) < int(n):
+        raise FileNotFoundError(
+            f"Nur {len(picked)} von {n} Subjects mit all-zero-Volume gefunden."
+        )
+    return picked
+
+
+def all_zero_qc_stats(subject_id: str) -> dict[str, object]:
+    az = np.asarray(
+        nib.load(str(all_zero_volume_path(subject_id))).get_fdata(), dtype=np.float32
+    ).squeeze()
+    stats: dict[str, object] = {
+        "subject_id": subject_id,
+        "shape": tuple(int(s) for s in az.shape),
+        "frac_nonzero": float(np.count_nonzero(az) / az.size),
+        "r_thalamus": np.nan,
+        "frac_nonzero_outside": np.nan,
+        "note": "",
+    }
+    orig_path = DATASET_DIRS[ALL_ZERO_DATASET] / "recon" / subject_id / "mri" / "cropped.nii.gz"
+    # Maske: bevorzugt aus A.7 / Jitter-Helfer
+    right_path = RUN_DIR / "heatmaps" / ALL_ZERO_DATASET / subject_id / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    if "jitter_mask_paths" in globals():
+        _, jp = jitter_mask_paths(subject_id)
+        if jp.is_file():
+            right_path = jp
+    if not orig_path.is_file() or not right_path.is_file():
+        stats["note"] = "Original oder rechte Maske fehlt."
+        return stats
+    orig = np.asarray(nib.load(str(orig_path)).get_fdata(), dtype=np.float32).squeeze()
+    right = np.asarray(nib.load(str(right_path)).get_fdata(), dtype=np.float32).squeeze() > 0
+    if orig.shape != az.shape or right.shape != az.shape:
+        stats["note"] = f"Shape-Mismatch: {orig.shape} / {az.shape} / {right.shape}"
+        return stats
+    inside = right
+    outside = ~right
+    if inside.sum() >= 2:
+        stats["r_thalamus"] = float(pearsonr(orig[inside], az[inside])[0])
+    if outside.any():
+        stats["frac_nonzero_outside"] = float(np.count_nonzero(az[outside]) / outside.sum())
+    return stats
+
+
+holdout_ids_d3 = load_ukb_holdout_ids() if "load_ukb_holdout_ids" in globals() else set()
+if not holdout_ids_d3:
+    _hdf = pd.read_csv(UKB_HOLDOUT_PREDICT_TSV, sep=None, engine="python")
+    _col = next(c for c in ("subject-id", "participant_id", "Subject") if c in _hdf.columns)
+    holdout_ids_d3 = {str(s) for s in _hdf[_col].dropna()}
+
+az_qc_subjects = pick_all_zero_subjects(
+    N_ALL_ZERO_QC_SUBJECTS, seed=ALL_ZERO_QC_SEED, exclude=holdout_ids_d3
+)
+print("QC-Subjects (Nicht-Holdout):", az_qc_subjects)
+
+az_qc_rows = []
+for sid in az_qc_subjects:
+    st = all_zero_qc_stats(sid)
+    az_qc_rows.append(st)
+    print(
+        f"[{sid}] frac_nonzero={st['frac_nonzero']:.4f}  "
+        f"r_thalamus={st['r_thalamus']}  "
+        f"frac_nonzero_outside={st['frac_nonzero_outside']}  {st['note']}"
+    )
+    vol = np.asarray(
+        nib.load(str(all_zero_volume_path(sid))).get_fdata(), dtype=np.float32
+    ).squeeze()
+    right_path = RUN_DIR / "heatmaps" / "ukb" / sid / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    right = (
+        np.asarray(nib.load(str(right_path)).get_fdata(), dtype=np.float32).squeeze()
+        if right_path.is_file()
+        else None
+    )
+    if "plot_jitter_slices" in globals():
+        plot_jitter_slices(
+            vol,
+            right,
+            title=f"D.3  all-zero  {sid}",
+            save_path=(
+                keras_xai_root
+                / "output"
+                / "notebooks"
+                / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+                / "all_zero_qc"
+                / f"slices_{sid}.png"
+            ),
+            show_inline=SHOW_PLOTS_INLINE,
+        )
+
+display(pd.DataFrame(az_qc_rows))
+
+
+# %% [markdown]
+# ## D.4. LRP-Heatmaps für all-zero UKB-Holdout-Volumes
+#
+# Analog zu **B.4**: Original-Modell + LRP **jedes Mal neu** auf Volumes aus
+# `UKB_ALL_ZERO_PREDICT_TSV`. Speichern als `heatmap_mni152.nii.gz` im gleichen
+# `mri/`-Ordner wie das Predict-Volume, z. B.
+#
+# ```
+# ~/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
+# ```
+#
+
+# %%
+N_PLOT_ALL_ZERO_SUBJECTS = int(N_SUBJECTS)
+HEATMAP_NIFTI_NAME = "heatmap_mni152.nii.gz"
+
+all_zero_plot_dir = (
+    keras_xai_root
+    / "output"
+    / "notebooks"
+    / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+    / "all_zero_lrp"
+)
+all_zero_plot_dir.mkdir(parents=True, exist_ok=True)
+
+az_saved_niftis: list[Path] = []
+az_rows: list[dict[str, object]] = []
+az_missing: list[str] = []
+
+df_az = dataset_labels_all_zero["ukb"]
+print(
+    f"=== ukb (all-zero): n={len(df_az)} Holdout-Subjects ===\n"
+    f"TSV: {UKB_ALL_ZERO_PREDICT_TSV}\n"
+    f"Heatmaps: jeweils neu via LRP → <volume_dir>/{HEATMAP_NIFTI_NAME}"
+)
+
+_sag = int(globals().get("JITTER_SAGITTAL_X", globals().get("OVERLAY_SAGITTAL_X", 70)))
+_cor = int(globals().get("JITTER_CORONAL_Y", globals().get("OVERLAY_CORONAL_Y", 104)))
+_ax = int(globals().get("JITTER_AXIAL_Z", globals().get("OVERLAY_AXIAL_Z", 78)))
+
+for i, (_, row) in enumerate(
+    tqdm(df_az.iterrows(), total=len(df_az), desc="ukb-all-zero")
+):
+    sid = str(row["participant_id"])
+    y_true = float(row[pred_var])
+    az_path = Path(str(row["filepath"]))
+    if not az_path.is_file():
+        az_missing.append(f"[ukb/{sid}] all-zero Volume fehlt: {az_path}")
+        continue
+
+    # LRP immer neu berechnen — keine alten Heatmaps laden.
+    vol = load_volume(str(az_path))
+    y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
+    R = lrp(np.expand_dims(vol, 0))[0].numpy()
+
+    nii_path = az_path.parent / HEATMAP_NIFTI_NAME
+    save_heatmap_nifti(R, str(az_path), nii_path)
+    az_saved_niftis.append(nii_path)
+
+    az_mri = az_path.parent
+    left_path = az_mri / "aseg_mni152_left_thalamus_cropped.nii.gz"
+    right_path = az_mri / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    fallback_l = RUN_DIR / "heatmaps" / "ukb" / sid / "aseg_mni152_left_thalamus_cropped.nii.gz"
+    fallback_r = RUN_DIR / "heatmaps" / "ukb" / sid / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    if not left_path.is_file() and fallback_l.is_file():
+        left_path = fallback_l
+    if not right_path.is_file() and fallback_r.is_file():
+        right_path = fallback_r
+
+    left_data = (
+        np.asarray(nib.load(str(left_path)).get_fdata(), dtype=np.float32).squeeze()
+        if left_path.is_file()
+        else None
+    )
+    right_data = (
+        np.asarray(nib.load(str(right_path)).get_fdata(), dtype=np.float32).squeeze()
+        if right_path.is_file()
+        else None
+    )
+
+    y_pred_orig = (
+        _original_prediction(sid) if "_original_prediction" in globals() else None
+    )
+    az_rows.append(
+        {
+            "subject_id": sid,
+            pred_var: y_true,
+            "pred_original": y_pred_orig,
+            "pred_all_zero": y_pred,
+            "delta_pred": None if y_pred_orig is None else y_pred - y_pred_orig,
+            "heatmap_path": str(nii_path),
+            "right_share_all_zero": (
+                float("nan")
+                if right_data is None
+                else _right_thalamus_share(R, right_data)
+            ),
+        }
+    )
+
+    if i < N_PLOT_ALL_ZERO_SUBJECTS:
+        plot_lrp_overlay(
+            R,
+            left_data,
+            right_data,
+            title=(
+                f"ukb all-zero  {sid}  true={y_true:.0f}  pred={y_pred:.0f}"
+                + ("" if y_pred_orig is None else f"  (orig={y_pred_orig:.0f})")
+            ),
+            save_path=all_zero_plot_dir / f"lrp_overlay_all_zero_{sid}.png",
+            show_inline=SHOW_PLOTS_INLINE,
+            sagittal_x=_sag,
+            coronal_y=_cor,
+            axial_z=_ax,
+        )
+
+print(
+    f"\nall-zero-Heatmaps neu geschrieben: {len(az_saved_niftis)}  |  "
+    f"Warnungen: {len(az_missing)}"
+)
+for m in az_missing:
+    print(" -", m)
+if az_saved_niftis:
+    print("Beispiel:", az_saved_niftis[0])
+
+if az_rows:
+    az_df = pd.DataFrame(az_rows)
+    display(az_df.round(3))
+    if az_df["delta_pred"].notna().any():
+        mae_shift = float(np.mean(np.abs(az_df["delta_pred"].dropna().to_numpy())))
+        print(f"mittlere |pred_all_zero - pred_original|: {mae_shift:.1f}")
+
+
+# %% [markdown]
+# ## D.5. Interaktiver 3D-Plot — Jitter-Modell (all-zero Volume)
+#
+# Analog zu **B.5**: erstes Subject aus `UKB_ALL_ZERO_PREDICT_TSV`, LRP mit dem
+# Jitter-Modell, Masken aus A.7.
+#
+# Heatmap als `heatmap_mni152_jitter_model.nii.gz` neben dem Predict-Volume.
+#
+
+# %%
+plot_dir_3d_az = (
+    keras_xai_root
+    / "output"
+    / "notebooks"
+    / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+)
+plot_dir_3d_az.mkdir(parents=True, exist_ok=True)
+
+jitter_model_d5 = _ensure_jitter_model()
+jitter_lrp_d5 = LRP(
+    jitter_model_d5,
+    layer=len(jitter_model_d5.layers) - 1,
+    idx=0,
+    strategy=strategy,
+)
+
+dataset_id = "ukb"
+row = dataset_labels_all_zero[dataset_id].iloc[0]
+sid = str(row["participant_id"])
+y_true = float(row[pred_var])
+t1_path = Path(str(row["filepath"]))
+az_mri = t1_path.parent
+left_path = az_mri / "aseg_mni152_left_thalamus_cropped.nii.gz"
+right_path = az_mri / "aseg_mni152_right_thalamus_cropped.nii.gz"
+mask_dir = RUN_DIR / "heatmaps" / dataset_id / sid
+if not left_path.is_file():
+    left_path = mask_dir / "aseg_mni152_left_thalamus_cropped.nii.gz"
+if not right_path.is_file():
+    right_path = mask_dir / "aseg_mni152_right_thalamus_cropped.nii.gz"
+
+missing = [p for p in (t1_path, left_path, right_path) if not p.is_file()]
+if missing:
+    print(f"[{dataset_id}/{sid}] Dateien fehlen:")
+    for p in missing:
+        print("  -", p)
+else:
+    vol = load_volume(str(t1_path))
+    x = np.expand_dims(vol, 0)
+    y_pred = float(np.squeeze(jitter_model_d5.predict(x, verbose=0)))
+    R = jitter_lrp_d5(x)[0].numpy()
+
+    hm_path = t1_path.parent / "heatmap_mni152_jitter_model.nii.gz"
+    save_heatmap_nifti(R, str(t1_path), hm_path)
+    print(
+        f"\n[{dataset_id}] Jitter-Modell 3D (all-zero Volume): {sid}  "
+        f"true={y_true:.1f}  pred={y_pred:.1f}"
+    )
+    print("Volume:", t1_path)
+    print("Heatmap:", hm_path)
+
+    plot_thalamus_lrp_3d(
+        dataset_id=dataset_id,
+        subject_id=sid,
+        volume=_load_vol(t1_path),
+        heatmap=R,
+        left_mask=_load_vol(left_path),
+        right_mask=_load_vol(right_path),
+        y_true=y_true,
+        y_pred=y_pred,
+        pred_var_name=pred_var,
+        title_suffix="Jitter-Modell @ all-zero",
+        save_html=(
+            plot_dir_3d_az
+            / f"{dataset_id}_{sid}_thalamus_lrp_3d_all_zero_model.html"
+        ),
+    )
+
