@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.16.6
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -922,6 +922,11 @@ plot_volume_intensity_qc(
 #
 # Die Spalten `pct_|R|_left` / `pct_|R|_right` / `pct_|R|_outside` sind Anteile
 # an der **gesamten** |R|-Summe (inkl. Hintergrund).
+# `sum_R_left` / `sum_R_right`: vorzeichenbehaftete Relevanz-Summe der Voxel
+# in der linken bzw. rechten Thalamus-Maske.
+#
+# Danach (A.10b): Histogramm der Relevanzwerte für das erste Subject je Dataset —
+# einmal über alle Voxel, einmal nur im rechten Thalamus (100 Bins, \([-0.4, +0.4]\)).
 
 # %%
 def _load_nii(path: Path) -> np.ndarray:
@@ -970,6 +975,8 @@ for dataset_id in DATASETS:
                 "pred": y_pred,
                 "sum_R": sum_total,
                 "sum_|R|": sum_abs,
+                "sum_R_left": sum_left,
+                "sum_R_right": sum_right,
                 "pct_|R|_left": 100.0 * sum_abs_left / sum_abs if sum_abs else np.nan,
                 "pct_|R|_right": 100.0 * sum_abs_right / sum_abs if sum_abs else np.nan,
                 "pct_|R|_outside": 100.0 * sum_abs_out / sum_abs if sum_abs else np.nan,
@@ -984,6 +991,124 @@ display(summary.round(4))
 out_tsv = RUN_DIR / "lrp_relevance_left_right_thalamus_by_subject.tsv"
 summary.to_csv(out_tsv, sep="\t", index=False, float_format="%.6e")
 print("gespeichert:", out_tsv)
+
+# %% [markdown]
+# ### A.10b. Histogramm der LRP-Relevanzen (erstes Subject je Dataset)
+#
+# Für das **erste** Holdout-Subject von IXI und UKB:
+#
+# 1. Histogramm **aller** Voxel-Relevanzen der unmaskierten Heatmap
+# 2. Histogramm nur der Relevanzen **im rechten Thalamus** (FreeSurfer-Maske)
+#
+# Jeweils **100 Bins** im Intervall \([-0.4,\,+0.4]\). Werte außerhalb des
+# Intervalls werden nicht in die Balken gezählt, aber als Anzahl ausgewiesen.
+
+# %%
+HIST_R_LO, HIST_R_HI = -0.4, 0.4
+HIST_N_BINS = 100
+HIST_BINS = np.linspace(HIST_R_LO, HIST_R_HI, HIST_N_BINS + 1)
+
+hist_plot_dir = (
+    keras_xai_root
+    / "output"
+    / "notebooks"
+    / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+    / "relevance_histograms"
+)
+hist_plot_dir.mkdir(parents=True, exist_ok=True)
+
+
+def plot_relevance_histograms(
+    heat: np.ndarray,
+    right_mask: np.ndarray,
+    *,
+    dataset_id: str,
+    subject_id: str,
+    bins: np.ndarray = HIST_BINS,
+    show_inline: bool = True,
+    save_dir: Path | None = hist_plot_dir,
+) -> None:
+    """Zwei Histogramme: alle Voxel vs. nur rechter Thalamus."""
+    heat = np.asarray(heat, dtype=np.float32).squeeze()
+    right = np.asarray(right_mask, dtype=bool).squeeze()
+    r_all = heat.ravel()
+    r_right = heat[right]
+
+    def _outside_count(vals: np.ndarray) -> int:
+        return int(np.sum((vals < bins[0]) | (vals > bins[-1])))
+
+    panels = [
+        (
+            r_all,
+            f"{dataset_id}  {subject_id}  ·  alle Voxel",
+            "alle_voxel",
+        ),
+        (
+            r_right,
+            f"{dataset_id}  {subject_id}  ·  rechter Thalamus",
+            "rechter_thalamus",
+        ),
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2), sharey=False)
+    for ax, (vals, title, tag) in zip(axes, panels):
+        n_out = _outside_count(vals)
+        ax.hist(
+            vals,
+            bins=bins,
+            color="steelblue",
+            edgecolor="white",
+            linewidth=0.3,
+        )
+        ax.axvline(0.0, color="k", ls=":", lw=0.9)
+        ax.set_xlabel("LRP-Relevanz R")
+        ax.set_ylabel("Anzahl Voxel")
+        ax.set_title(
+            f"{title}\n"
+            f"n={vals.size:,}  |  min/max={vals.min():.4g}/{vals.max():.4g}  |  "
+            f"außerhalb [{bins[0]:.1f},{bins[-1]:.1f}]: {n_out:,}",
+            fontsize=9,
+        )
+        print(
+            f"[{dataset_id}/{subject_id}/{tag}] n={vals.size}  "
+            f"min={vals.min():.6g}  max={vals.max():.6g}  "
+            f"mean={vals.mean():.6g}  außerhalb_Bins={n_out}"
+        )
+
+    fig.suptitle(
+        f"LRP-Relevanz-Histogramm ({HIST_N_BINS} Bins, [{HIST_R_LO}, {HIST_R_HI}])",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    if save_dir is not None:
+        out = save_dir / f"lrp_hist_{dataset_id}_{subject_id}.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight")
+        print("gespeichert:", out)
+    if show_inline:
+        display(fig)
+    plt.close(fig)
+
+
+for dataset_id in DATASETS:
+    df0 = dataset_labels[dataset_id]
+    if df0.empty:
+        print(f"[{dataset_id}] keine Subjects.")
+        continue
+    row0 = df0.iloc[0]
+    sid0 = str(row0["participant_id"])
+    subject_dir = RUN_DIR / "heatmaps" / dataset_id / sid0
+    heatmap_path = subject_dir / f"lrp_heatmap_{dataset_id}_{sid0}.nii.gz"
+    right_p = subject_dir / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    if not heatmap_path.is_file() or not right_p.is_file():
+        print(f"[{dataset_id}/{sid0}] Heatmap oder rechte Maske fehlt — übersprungen.")
+        continue
+    plot_relevance_histograms(
+        _load_nii(heatmap_path),
+        _load_nii(right_p) > 0,
+        dataset_id=dataset_id,
+        subject_id=sid0,
+        show_inline=SHOW_PLOTS_INLINE,
+    )
 
 # %% [markdown]
 # ## A.11. Interaktiver 3D-Plot (erstes Subject je Dataset)
