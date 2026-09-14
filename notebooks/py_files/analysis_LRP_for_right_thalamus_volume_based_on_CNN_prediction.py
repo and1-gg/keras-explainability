@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.16.6
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -47,6 +47,11 @@
 #
 # Wie Teil B, aber Inputs `<subject-id>_right_thalamus_cropped.nii.gz`
 # (alles außer rechtem Thalamus = 0).
+#
+# **Teil E — Summary up to now:**
+#
+# Übersichtsfigur (2×3) für ein UKB-Holdout-Subject, sagittal `x=70`:
+# normale / gejitterte / all-zero Inputs (oben) und korrespondierende LRP-Heatmaps (unten).
 #
 
 # %% [markdown]
@@ -3015,3 +3020,326 @@ else:
         ),
     )
 
+
+# %% [markdown]
+# ## E. Summary up to now
+#
+# Übersichtsfigur **2×3** für **ein** UKB-Holdout-Subject, **sagittaler Schnitt `x=70`**
+# (gleiche Orientierung wie A.7 / B.4):
+#
+# - **Top row:** input volumes — (1) normal brain, (2) jittered (right thalamus preserved), (3) all-zero except right thalamus
+# - **Bottom row:** corresponding **unnormalized** LRP heatmaps (original model; same files as A.7 / B.4 / D.4)
+#
+# Jede LRP-Panel hat eine **eigene Colorbar** mit `vmax = max|R|` dieses Heatmaps
+# (keine gemeinsame Skala mit all-zero — sonst wirken normal/jittered „leer“).
+#
+# Right thalamus shaded in green; labels in English.
+#
+
+# %%
+from matplotlib.patches import Patch
+
+SUMMARY_SAGITTAL_X = int(
+    globals().get("OVERLAY_SAGITTAL_X", globals().get("JITTER_SAGITTAL_X", 70))
+)
+SUMMARY_DATASET = "ukb"
+COLOR_RIGHT = (0.15, 0.65, 0.25, 0.40)
+HEATMAP_NIFTI_NAME = globals().get("HEATMAP_NIFTI_NAME", "heatmap_mni152.nii.gz")
+
+
+def _load_vol_summary(path: Path) -> np.ndarray:
+    return np.asarray(nib.load(str(path)).get_fdata(), dtype=np.float32).squeeze()
+
+
+def _rgba_mask(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
+    out = np.zeros((*mask_slc.shape, 4), dtype=np.float32)
+    out[mask_slc] = rgba
+    return out
+
+
+def _tsv_path_by_subject(tsv: Path) -> dict[str, Path]:
+    """Full predict.tsv lookup: subject-id → filepath (order may differ across TSVs)."""
+    df = pd.read_csv(tsv, sep=None, engine="python")
+    if "filepath" not in df.columns and "path" in df.columns:
+        df = df.rename(columns={"path": "filepath"})
+    id_col = next(
+        (c for c in ("subject-id", "participant_id", "Subject") if c in df.columns),
+        None,
+    )
+    if id_col is None or "filepath" not in df.columns:
+        raise ValueError(f"Need subject-id + filepath in {tsv}; got {list(df.columns)}")
+    out: dict[str, Path] = {}
+    for _, row in df.iterrows():
+        out[str(row[id_col])] = Path(str(row["filepath"]))
+    return out
+
+
+def _ensure_lrp_heatmap(volume_path: Path, heatmap_path: Path) -> Path:
+    """Load existing unnormalized heatmap or compute+save with original-model LRP."""
+    heatmap_path = Path(heatmap_path)
+    if heatmap_path.is_file():
+        return heatmap_path
+    if "lrp" not in globals() or "load_volume" not in globals():
+        raise RuntimeError("LRP/model not available — run section A.5 first.")
+    print(f"computing LRP heatmap → {heatmap_path}")
+    vol = load_volume(str(volume_path))
+    R = lrp(np.expand_dims(vol, 0))[0].numpy()
+    save_heatmap_nifti(R, str(volume_path), heatmap_path)
+    return heatmap_path
+
+
+def _right_mask_for(sid: str, *volume_dirs: Path) -> Path:
+    cands: list[Path] = [
+        RUN_DIR
+        / "heatmaps"
+        / SUMMARY_DATASET
+        / sid
+        / "aseg_mni152_right_thalamus_cropped.nii.gz"
+    ]
+    if "jitter_mask_paths" in globals():
+        _, jp = jitter_mask_paths(sid)
+        cands.append(jp)
+    for d in volume_dirs:
+        cands.append(Path(d) / "aseg_mni152_right_thalamus_cropped.nii.gz")
+    for p in cands:
+        if p is not None and Path(p).is_file():
+            return Path(p)
+    raise FileNotFoundError(f"Right thalamus mask missing for {sid}")
+
+
+def _sagittal_slc(vol: np.ndarray, cx: int) -> np.ndarray:
+    """Same sagittal orientation as plot_lrp_overlay / A.7 / B.4."""
+    return np.rot90(vol[cx])
+
+
+# Full holdout TSVs (same subjects, different row order — head(N) does not overlap).
+norm_by_id = _tsv_path_by_subject(UKB_HOLDOUT_PREDICT_TSV)
+jit_by_id = _tsv_path_by_subject(UKB_JITTERED_PREDICT_TSV)
+az_by_id = _tsv_path_by_subject(UKB_ALL_ZERO_PREDICT_TSV)
+common_ids = set(norm_by_id) & set(jit_by_id) & set(az_by_id)
+if not common_ids:
+    raise RuntimeError("No shared subject-ids across the three UKB predict TSVs.")
+
+
+def _heatmap_paths(sid: str) -> tuple[Path, Path, Path]:
+    path_n, path_j, path_a = norm_by_id[sid], jit_by_id[sid], az_by_id[sid]
+    hm_n = (
+        RUN_DIR
+        / "heatmaps"
+        / SUMMARY_DATASET
+        / sid
+        / f"lrp_heatmap_{SUMMARY_DATASET}_{sid}.nii.gz"
+    )
+    return hm_n, path_j.parent / HEATMAP_NIFTI_NAME, path_a.parent / HEATMAP_NIFTI_NAME
+
+
+# Prefer A.7 subjects first (normal heatmaps already match the A.7 overlays),
+# then jittered/all-zero subjects from B/D.
+preferred: list[str] = []
+for src in (
+    globals().get("dataset_labels", {}).get(SUMMARY_DATASET),
+    globals().get("dataset_labels_jittered", {}).get(SUMMARY_DATASET),
+    globals().get("dataset_labels_all_zero", {}).get(SUMMARY_DATASET),
+):
+    if src is None:
+        continue
+    for _, row in src.iterrows():
+        sid = str(row.get("participant_id", row.get("subject-id", "")))
+        if sid in common_ids and sid not in preferred:
+            preferred.append(sid)
+
+candidates = list(preferred)
+if not candidates:
+    for sid in norm_by_id:
+        if sid in common_ids:
+            candidates = [sid]
+            break
+
+# Prefer candidates with most heatmaps already on disk.
+candidates = sorted(
+    candidates,
+    key=lambda sid: (-sum(p.is_file() for p in _heatmap_paths(sid)), sid),
+)
+summary_sid = candidates[0]
+path_norm = norm_by_id[summary_sid]
+path_jit = jit_by_id[summary_sid]
+path_az = az_by_id[summary_sid]
+hm_norm, hm_jit, hm_az = _heatmap_paths(summary_sid)
+n_ready_hm = sum(p.is_file() for p in (hm_norm, hm_jit, hm_az))
+
+for vol_path, hm_path in (
+    (path_norm, hm_norm),
+    (path_jit, hm_jit),
+    (path_az, hm_az),
+):
+    if not vol_path.is_file():
+        raise FileNotFoundError(f"Volume missing: {vol_path}")
+    _ensure_lrp_heatmap(vol_path, hm_path)
+
+right_mask_path = _right_mask_for(summary_sid, path_jit.parent, path_az.parent)
+print(
+    f"summary subject: {summary_sid}  "
+    f"(heatmaps already on disk: {n_ready_hm}/3 before ensure)"
+)
+
+vol_norm = _load_vol_summary(path_norm)
+vol_jit = _load_vol_summary(path_jit)
+vol_az = _load_vol_summary(path_az)
+heat_norm = _load_vol_summary(hm_norm)
+heat_jit = _load_vol_summary(hm_jit)
+heat_az = _load_vol_summary(hm_az)
+right = _load_vol_summary(right_mask_path) > 0
+
+# True label (same for all three inputs) + original-model predictions per input.
+_df_true = pd.read_csv(UKB_HOLDOUT_PREDICT_TSV, sep=None, engine="python")
+_id_col = next(c for c in ("subject-id", "participant_id", "Subject") if c in _df_true.columns)
+_row_true = _df_true.loc[_df_true[_id_col].astype(str) == summary_sid].iloc[0]
+y_true = float(_row_true[pred_var])
+
+def _predict_path(path: Path) -> float:
+    vol = load_volume(str(path))
+    return float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
+
+y_pred_norm = _predict_path(path_norm)
+y_pred_jit = _predict_path(path_jit)
+y_pred_az = _predict_path(path_az)
+print(
+    f"true={y_true:.1f}  "
+    f"pred_normal={y_pred_norm:.1f}  "
+    f"pred_jittered={y_pred_jit:.1f}  "
+    f"pred_all_zero={y_pred_az:.1f}"
+)
+
+cx = int(np.clip(SUMMARY_SAGITTAL_X, 0, vol_norm.shape[0] - 1))
+
+# Per-panel intensity vmax (own colorbar each); all-zero is sparse.
+volumes = [vol_norm, vol_jit, vol_az]
+vmax_ints: list[float] = []
+for vol in volumes:
+    pos = vol[vol > 0]
+    vmax_ints.append(float(np.percentile(pos, 99.5)) if pos.size else 1.0)
+
+# Unnormalized LRP: per-panel vmax (like A.7/B.4) — do NOT share scale with all-zero.
+heats = [heat_norm, heat_jit, heat_az]
+vmax_lrps = [float(np.nanmax(np.abs(h))) or 1.0 for h in heats]
+print(
+    "intensity vmax:  "
+    f"normal={vmax_ints[0]:.4g}  jittered={vmax_ints[1]:.4g}  all-zero={vmax_ints[2]:.4g}"
+)
+print(
+    "unnormalized |R|_max:  "
+    f"normal={vmax_lrps[0]:.4g}  jittered={vmax_lrps[1]:.4g}  all-zero={vmax_lrps[2]:.4g}"
+)
+
+top_titles = [
+    f"Normal brain (holdout)\ntrue={y_true:.0f}  predicted={y_pred_norm:.0f}",
+    f"Jittered (right thalamus preserved)\ntrue={y_true:.0f}  predicted={y_pred_jit:.0f}",
+    f"All-zero except right thalamus\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
+]
+bottom_titles = [
+    f"LRP — normal input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_norm:.0f}",
+    f"LRP — jittered input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_jit:.0f}",
+    f"LRP — all-zero input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
+]
+
+fig, axes = plt.subplots(2, 3, figsize=(14, 8.5))
+fig.suptitle(
+    f"E. Summary  ·  {SUMMARY_DATASET}  {summary_sid}  ·  sagittal x={cx}",
+    fontsize=12,
+)
+
+r_slc = _sagittal_slc(right.astype(np.float32), cx) > 0
+
+im_vols = []
+for col, (vol, title, vmax_i) in enumerate(zip(volumes, top_titles, vmax_ints)):
+    ax = axes[0, col]
+    im = ax.imshow(_sagittal_slc(vol, cx), cmap="gray", vmin=0.0, vmax=vmax_i)
+    ax.imshow(_rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    ax.set_title(title, fontsize=10)
+    ax.axis("off")
+    im_vols.append(im)
+
+im_lrps = []
+for col, (heat, title, vmax_r) in enumerate(zip(heats, bottom_titles, vmax_lrps)):
+    ax = axes[1, col]
+    im = ax.imshow(
+        _sagittal_slc(heat, cx),
+        cmap="seismic",
+        vmin=-vmax_r,
+        vmax=vmax_r,
+    )
+    ax.imshow(_rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    ax.set_title(f"{title}\n|R|_max={vmax_r:.3g}", fontsize=9)
+    ax.axis("off")
+    im_lrps.append(im)
+
+# Own colorbar per panel (top: intensity, bottom: unnormalized LRP).
+for col, im in enumerate(im_vols):
+    cbar = fig.colorbar(im, ax=axes[0, col], fraction=0.046, pad=0.04)
+    cbar.set_label("Intensity")
+for col, im in enumerate(im_lrps):
+    cbar = fig.colorbar(im, ax=axes[1, col], fraction=0.046, pad=0.04)
+    cbar.set_label("LRP relevance")
+
+from matplotlib.lines import Line2D
+
+fig.legend(
+    handles=[
+        Patch(facecolor=COLOR_RIGHT, edgecolor="none", label="Right thalamus"),
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            label=f"Normal: true={y_true:.0f}, predicted={y_pred_norm:.0f}",
+        ),
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            label=f"Jittered: true={y_true:.0f}, predicted={y_pred_jit:.0f}",
+        ),
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            label=f"All-zero: true={y_true:.0f}, predicted={y_pred_az:.0f}",
+        ),
+    ],
+    loc="lower center",
+    ncol=2,
+    frameon=False,
+    fontsize=9,
+)
+fig.tight_layout(rect=[0, 0.10, 1, 0.95])
+
+summary_plot_dir = (
+    keras_xai_root
+    / "output"
+    / "notebooks"
+    / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+    / "summary"
+)
+summary_plot_dir.mkdir(parents=True, exist_ok=True)
+summary_path = (
+    summary_plot_dir
+    / f"summary_2x3_sagittal_x{cx}_{SUMMARY_DATASET}_{summary_sid}.png"
+)
+fig.savefig(summary_path, dpi=130, bbox_inches="tight")
+print("saved:", summary_path)
+print("subject:", summary_sid)
+print("  normal:  ", path_norm)
+print("  jittered:", path_jit)
+print("  all-zero:", path_az)
+print("heatmaps:")
+print("  normal:  ", hm_norm)
+print("  jittered:", hm_jit)
+print("  all-zero:", hm_az)
+
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+
+# %%
+
+# %%
