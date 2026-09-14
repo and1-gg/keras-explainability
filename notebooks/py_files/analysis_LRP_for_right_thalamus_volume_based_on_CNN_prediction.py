@@ -47,6 +47,8 @@
 #
 # Wie Teil B, aber Inputs `<subject-id>_right_thalamus_cropped.nii.gz`
 # (alles außer rechtem Thalamus = 0).
+# True-vs-Pred / 3D mit All-zero-Modell `training_run_21h19m09s_09sep2026`
+# (nicht dem Jitter-Modell aus B).
 #
 # **Teil E — Summary up to now:**
 #
@@ -1888,6 +1890,8 @@ display(pd.DataFrame(qc_rows))
 # Auswertung: `pred_original` (A.7 auf `cropped.nii.gz`) vs. `pred_jittered` sowie
 # `|R|`-Anteil im rechten Thalamus.
 #
+# **Wichtig:** Jitter-`predict.tsv` und Holdout-`predict.tsv` haben dieselbe Subject-Menge, aber **andere Reihenfolge**. `pred_original` / `right_share_original` werden daher bei Bedarf on-demand auf `cropped.nii.gz` berechnet (nicht nur aus dem A.7-Cache).
+#
 
 # %%
 N_PLOT_JITTER_SUBJECTS = int(N_SUBJECTS)  # alle Holdout-Subjects plotten
@@ -1903,12 +1907,29 @@ jitter_plot_dir = (
 jitter_plot_dir.mkdir(parents=True, exist_ok=True)
 
 
+def _original_volume_path(subject_id: str) -> Path:
+    """Unmanipuliertes Holdout-Volume (`cropped.nii.gz`)."""
+    if "original_volume_path" in globals():
+        return Path(original_volume_path(subject_id))
+    return DATASET_DIRS[JITTER_DATASET] / "recon" / subject_id / "mri" / "cropped.nii.gz"
+
+
 def _original_prediction(subject_id: str) -> float | None:
-    """Vorhersage auf dem *unmanipulierten* Volume aus Abschnitt A.7, falls vorhanden."""
+    """Original-Modell auf `cropped.nii.gz`.
+
+    Nutzt A.7-Cache (`preds_by_dataset`), sonst On-Demand-Predict.
+    (Jitter-/All-zero-TSV haben andere Reihenfolge als der Holdout-TSV —
+    A.7 kennt daher oft nicht dieselben Subject-IDs.)
+    """
     for rec in globals().get("preds_by_dataset", {}).get(JITTER_DATASET, []):
         if str(rec["subject_id"]) == subject_id:
             return float(rec["prediction"])
-    return None
+    path = _original_volume_path(subject_id)
+    if not path.is_file():
+        print(f"[{JITTER_DATASET}/{subject_id}] Original-Volume fehlt: {path}")
+        return None
+    vol = load_volume(str(path))
+    return float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
 
 
 def _right_thalamus_share(heat: np.ndarray, right: np.ndarray) -> float:
@@ -1919,16 +1940,32 @@ def _right_thalamus_share(heat: np.ndarray, right: np.ndarray) -> float:
     return float(np.sum(np.abs(heat[right > 0]))) / total
 
 
-def _original_right_share(subject_id: str, right: np.ndarray) -> float:
-    """Gleicher Anteil für die Original-Heatmap aus Abschnitt A.7 (falls vorhanden)."""
-    path = (
+def _ensure_original_lrp_heatmap(subject_id: str) -> Path | None:
+    """A.7-Heatmap laden oder mit Original-Modell neu berechnen."""
+    out = (
         RUN_DIR
         / "heatmaps"
         / JITTER_DATASET
         / subject_id
         / f"lrp_heatmap_{JITTER_DATASET}_{subject_id}.nii.gz"
     )
+    if out.is_file():
+        return out
+    path = _original_volume_path(subject_id)
     if not path.is_file():
+        print(f"[{JITTER_DATASET}/{subject_id}] Original-Volume fehlt für LRP: {path}")
+        return None
+    print(f"[{JITTER_DATASET}/{subject_id}] berechne Original-LRP → {out}")
+    vol = load_volume(str(path))
+    R = lrp(np.expand_dims(vol, 0))[0].numpy()
+    save_heatmap_nifti(R, str(path), out)
+    return out
+
+
+def _original_right_share(subject_id: str, right: np.ndarray) -> float:
+    """|R|-Anteil im rechten Thalamus für die Original-Heatmap (A.7 oder neu)."""
+    path = _ensure_original_lrp_heatmap(subject_id)
+    if path is None:
         return float("nan")
     return _right_thalamus_share(_load_jitter_nii(path), right)
 
@@ -2026,9 +2063,24 @@ if jitter_saved_niftis:
 if jitter_rows:
     jitter_df = pd.DataFrame(jitter_rows)
     display(jitter_df.round(3))
-    if jitter_df["delta_pred"].notna().any():
-        mae_shift = float(np.mean(np.abs(jitter_df["delta_pred"].dropna().to_numpy())))
+    y_true_a = jitter_df[pred_var].astype(float)
+    y_jit = jitter_df["pred_jittered"].astype(float)
+    print(
+        f"MAE(pred_jittered, true)={float(np.mean(np.abs(y_jit - y_true_a))):.1f}  "
+        f"n={len(jitter_df)}"
+    )
+    mask = jitter_df["pred_original"].notna()
+    if mask.any():
+        mae_orig = float(np.mean(np.abs(
+            jitter_df.loc[mask, "pred_original"].astype(float) - y_true_a[mask]
+        )))
+        mae_shift = float(np.mean(np.abs(jitter_df.loc[mask, "delta_pred"].astype(float))))
+        print(f"MAE(pred_original, true)={mae_orig:.1f}  n={int(mask.sum())}")
         print(f"mittlere |pred_jittered - pred_original|: {mae_shift:.1f}")
+        print(
+            "Hinweis: entscheidend ist |pred_jittered - pred_original| "
+            "(gleiches Original-Modell; true-Abweichung allein misst nicht den Jitter-Effekt)."
+        )
 
 
 # %% [markdown]
@@ -2567,19 +2619,19 @@ _summarize_layerwise_frames(
 # %% [markdown]
 # ## D. All-zero außer rechter Thalamus
 #
-# Wie **Teil B**, aber mit Volumes aus `UKB_ALL_ZERO_PREDICT_TSV`: alle Hirnregionen
-# außer dem rechten Thalamus sind auf Null
-# (`<subject-id>_right_thalamus_cropped.nii.gz`).
+# Wie **Teil B**, aber mit Volumes aus `UKB_ALL_ZERO_PREDICT_TSV`
+# (`<subject-id>_right_thalamus_cropped.nii.gz`, alles außer rechtem Thalamus = 0).
 #
-# Vorhersagen und LRP laufen auf diesen transformierten Images — **nicht** auf
-# `cropped.nii.gz`.
+# **Modell für True-vs-Pred / 3D (D.1, D.5):** All-zero-Training
+# `training_run_21h19m09s_09sep2026` — **nicht** das Jitter-Modell aus B.
 #
 
 # %% [markdown]
-# ## D.1. True vs. Predicted (jittered model auf all-zero Volumes)
+# ## D.1. True vs. Predicted (all-zero model auf all-zero Volumes)
 #
 # Analog zu **B.1**: Scatter / Pearson-r / MAE für `N_SUBJECTS` UKB-Holdout-Subjects
-# aus `UKB_ALL_ZERO_PREDICT_TSV`, mit dem **Jitter-Modell**.
+# aus `UKB_ALL_ZERO_PREDICT_TSV`, mit dem **All-zero-Modell**
+# (`training_run_21h19m09s_09sep2026`).
 #
 
 # %%
@@ -2595,7 +2647,44 @@ df_ukb_all_zero = dataset_labels_all_zero["ukb"]
 print(f"[D.1] n={len(df_ukb_all_zero)}  TSV={UKB_ALL_ZERO_PREDICT_TSV}")
 print("Erstes Volume:", df_ukb_all_zero.iloc[0]["filepath"])
 
-jitter_model_d1 = _ensure_jitter_model()
+# All-zero-Modell (eigenständiger Run — nicht JITTER_MODEL_RUN_DIR / B.1).
+ALL_ZERO_MODEL_RUN_DIR = Path(
+    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "training_run_21h19m09s_09sep2026"
+).expanduser().resolve()
+ALL_ZERO_MODEL_PATH = ALL_ZERO_MODEL_RUN_DIR / "model.keras"
+ALL_ZERO_CONFIG_PATH = ALL_ZERO_MODEL_RUN_DIR / "config.yaml"
+for p, name in (
+    (ALL_ZERO_MODEL_PATH, "All-zero-Modell"),
+    (ALL_ZERO_CONFIG_PATH, "All-zero-Config"),
+):
+    if not p.is_file():
+        raise FileNotFoundError(f"{name} fehlt: {p}")
+
+
+def _ensure_all_zero_model():
+    """All-zero-Trainingslauf laden (D.1 / D.5)."""
+    if "all_zero_model" in globals() and globals()["all_zero_model"] is not None:
+        return globals()["all_zero_model"]
+    az_cfg = OmegaConf.load(ALL_ZERO_CONFIG_PATH)
+    with open_dict(az_cfg):
+        az_cfg.paths.csv_dir = str(ALL_ZERO_MODEL_RUN_DIR)
+        if "prediction" not in az_cfg.training:
+            az_cfg.training.prediction = {}
+        az_cfg.training.prediction.batch_size = int(PRED_BATCH_SIZE)
+    az_model = _build_single_device_model(az_cfg)
+    w0 = az_model.get_weights()[0].copy()
+    az_model.load_weights(str(ALL_ZERO_MODEL_PATH))
+    delta = float(np.mean(np.abs(az_model.get_weights()[0] - w0)))
+    if delta < 1e-9:
+        raise RuntimeError("All-zero-Modell-Gewichte wurden nicht geladen.")
+    globals()["all_zero_model"] = az_model
+    print(f"ALL_ZERO_MODEL_RUN_DIR: {ALL_ZERO_MODEL_RUN_DIR}")
+    print(f"Gewichtsdelta (all-zero model): {delta:.3g}")
+    return az_model
+
+
+all_zero_model_d1 = _ensure_all_zero_model()
 all_zero_model_rows: list[dict[str, object]] = []
 for _, row in tqdm(
     df_ukb_all_zero.iterrows(), total=len(df_ukb_all_zero), desc="ukb-all-zero-model"
@@ -2607,7 +2696,7 @@ for _, row in tqdm(
         print(f"[ukb/{sid}] Volume fehlt: {path}")
         continue
     vol = load_volume(path)
-    y_pred = float(np.squeeze(jitter_model_d1.predict(np.expand_dims(vol, 0), verbose=0)))
+    y_pred = float(np.squeeze(all_zero_model_d1.predict(np.expand_dims(vol, 0), verbose=0)))
     all_zero_model_rows.append(
         {"subject_id": sid, pred_var: y_true, "prediction": y_pred, "filepath": path}
     )
@@ -2620,7 +2709,7 @@ y_true = all_zero_preds_df[pred_var].astype(float).to_numpy()
 y_pred = all_zero_preds_df["prediction"].astype(float).to_numpy()
 r_val, _ = pearsonr(y_true, y_pred) if len(all_zero_preds_df) >= 2 else (np.nan, None)
 mae = float(np.mean(np.abs(y_true - y_pred)))
-print(f"[ukb | jittered model @ all-zero] n={len(all_zero_preds_df)}  r={r_val:.3f}  MAE={mae:.1f}")
+print(f"[ukb | all-zero model @ all-zero] n={len(all_zero_preds_df)}  r={r_val:.3f}  MAE={mae:.1f}")
 display(all_zero_preds_df[["subject_id", pred_var, "prediction"]].round(1))
 
 fig, ax = plt.subplots(figsize=(4.5, 4.5))
@@ -2629,12 +2718,12 @@ lo = float(min(y_true.min(), y_pred.min()))
 hi = float(max(y_true.max(), y_pred.max()))
 ax.plot([lo, hi], [lo, hi], "k--", lw=1)
 ax.set_xlabel(f"true {pred_var}")
-ax.set_ylabel("prediction (jittered model @ all-zero)")
-ax.set_title(f"ukb  all-zero  r={r_val:.3f}  MAE={mae:.1f}")
+ax.set_ylabel("prediction (all-zero model @ all-zero)")
+ax.set_title(f"ukb  all-zero model  r={r_val:.3f}  MAE={mae:.1f}")
 ax.set_aspect("equal", adjustable="box")
 fig.tight_layout()
 scatter_path = (
-    JITTER_MODEL_RUN_DIR
+    ALL_ZERO_MODEL_RUN_DIR
     / f"scatter_true_vs_pred_ukb_all_zero_vols_n{len(all_zero_preds_df)}.png"
 )
 fig.savefig(scatter_path, dpi=110)
@@ -2814,7 +2903,8 @@ display(pd.DataFrame(az_qc_rows))
 # %% [markdown]
 # ## D.4. LRP-Heatmaps für all-zero UKB-Holdout-Volumes
 #
-# Analog zu **B.4**: Original-Modell + LRP **jedes Mal neu** auf Volumes aus
+# Analog zu **B.4**, aber mit dem **All-zero-Modell** aus D.1
+# (`training_run_21h19m09s_09sep2026`) + LRP **jedes Mal neu** auf Volumes aus
 # `UKB_ALL_ZERO_PREDICT_TSV`. Speichern als `heatmap_mni152.nii.gz` im gleichen
 # `mri/`-Ordner wie das Predict-Volume, z. B.
 #
@@ -2841,9 +2931,21 @@ az_rows: list[dict[str, object]] = []
 az_missing: list[str] = []
 
 df_az = dataset_labels_all_zero["ukb"]
+
+# Gleiches Modell wie D.1 (nicht das Original-Modell aus A).
+if "_ensure_all_zero_model" not in globals():
+    raise RuntimeError("D.1 zuerst ausführen (_ensure_all_zero_model fehlt).")
+all_zero_model_d4 = _ensure_all_zero_model()
+all_zero_lrp_d4 = LRP(
+    all_zero_model_d4,
+    layer=len(all_zero_model_d4.layers) - 1,
+    idx=0,
+    strategy=strategy,
+)
 print(
     f"=== ukb (all-zero): n={len(df_az)} Holdout-Subjects ===\n"
     f"TSV: {UKB_ALL_ZERO_PREDICT_TSV}\n"
+    f"Modell: {globals().get('ALL_ZERO_MODEL_RUN_DIR', '(ALL_ZERO_MODEL_RUN_DIR)')}\n"
     f"Heatmaps: jeweils neu via LRP → <volume_dir>/{HEATMAP_NIFTI_NAME}"
 )
 
@@ -2861,10 +2963,11 @@ for i, (_, row) in enumerate(
         az_missing.append(f"[ukb/{sid}] all-zero Volume fehlt: {az_path}")
         continue
 
-    # LRP immer neu berechnen — keine alten Heatmaps laden.
+    # LRP mit All-zero-Modell (wie D.1) — keine alten Heatmaps laden.
     vol = load_volume(str(az_path))
-    y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
-    R = lrp(np.expand_dims(vol, 0))[0].numpy()
+    x = np.expand_dims(vol, 0)
+    y_pred = float(np.squeeze(all_zero_model_d4.predict(x, verbose=0)))
+    R = all_zero_lrp_d4(x)[0].numpy()
 
     nii_path = az_path.parent / HEATMAP_NIFTI_NAME
     save_heatmap_nifti(R, str(az_path), nii_path)
@@ -2916,7 +3019,7 @@ for i, (_, row) in enumerate(
             left_data,
             right_data,
             title=(
-                f"ukb all-zero  {sid}  true={y_true:.0f}  pred={y_pred:.0f}"
+                f"ukb all-zero-model  {sid}  true={y_true:.0f}  pred={y_pred:.0f}"
                 + ("" if y_pred_orig is None else f"  (orig={y_pred_orig:.0f})")
             ),
             save_path=all_zero_plot_dir / f"lrp_overlay_all_zero_{sid}.png",
@@ -2938,18 +3041,29 @@ if az_saved_niftis:
 if az_rows:
     az_df = pd.DataFrame(az_rows)
     display(az_df.round(3))
-    if az_df["delta_pred"].notna().any():
-        mae_shift = float(np.mean(np.abs(az_df["delta_pred"].dropna().to_numpy())))
+    y_true_a = az_df[pred_var].astype(float)
+    y_az = az_df["pred_all_zero"].astype(float)
+    print(
+        f"MAE(pred_all_zero_model, true)={float(np.mean(np.abs(y_az - y_true_a))):.1f}  "
+        f"n={len(az_df)}"
+    )
+    mask = az_df["pred_original"].notna()
+    if mask.any():
+        mae_orig = float(np.mean(np.abs(
+            az_df.loc[mask, "pred_original"].astype(float) - y_true_a[mask]
+        )))
+        mae_shift = float(np.mean(np.abs(az_df.loc[mask, "delta_pred"].astype(float))))
+        print(f"MAE(pred_original, true)={mae_orig:.1f}  n={int(mask.sum())}")
         print(f"mittlere |pred_all_zero - pred_original|: {mae_shift:.1f}")
 
 
 # %% [markdown]
-# ## D.5. Interaktiver 3D-Plot — Jitter-Modell (all-zero Volume)
+# ## D.5. Interaktiver 3D-Plot — All-zero-Modell (all-zero Volume)
 #
 # Analog zu **B.5**: erstes Subject aus `UKB_ALL_ZERO_PREDICT_TSV`, LRP mit dem
-# Jitter-Modell, Masken aus A.7.
+# **All-zero-Modell** (`training_run_21h19m09s_09sep2026`), Masken aus A.7.
 #
-# Heatmap als `heatmap_mni152_jitter_model.nii.gz` neben dem Predict-Volume.
+# Heatmap als `heatmap_mni152_all_zero_model.nii.gz` neben dem Predict-Volume.
 #
 
 # %%
@@ -2961,10 +3075,10 @@ plot_dir_3d_az = (
 )
 plot_dir_3d_az.mkdir(parents=True, exist_ok=True)
 
-jitter_model_d5 = _ensure_jitter_model()
-jitter_lrp_d5 = LRP(
-    jitter_model_d5,
-    layer=len(jitter_model_d5.layers) - 1,
+all_zero_model_d5 = _ensure_all_zero_model()
+all_zero_lrp_d5 = LRP(
+    all_zero_model_d5,
+    layer=len(all_zero_model_d5.layers) - 1,
     idx=0,
     strategy=strategy,
 )
@@ -2991,13 +3105,13 @@ if missing:
 else:
     vol = load_volume(str(t1_path))
     x = np.expand_dims(vol, 0)
-    y_pred = float(np.squeeze(jitter_model_d5.predict(x, verbose=0)))
-    R = jitter_lrp_d5(x)[0].numpy()
+    y_pred = float(np.squeeze(all_zero_model_d5.predict(x, verbose=0)))
+    R = all_zero_lrp_d5(x)[0].numpy()
 
-    hm_path = t1_path.parent / "heatmap_mni152_jitter_model.nii.gz"
+    hm_path = t1_path.parent / "heatmap_mni152_all_zero_model.nii.gz"
     save_heatmap_nifti(R, str(t1_path), hm_path)
     print(
-        f"\n[{dataset_id}] Jitter-Modell 3D (all-zero Volume): {sid}  "
+        f"\n[{dataset_id}] All-zero-Modell 3D (all-zero Volume): {sid}  "
         f"true={y_true:.1f}  pred={y_pred:.1f}"
     )
     print("Volume:", t1_path)
@@ -3013,10 +3127,10 @@ else:
         y_true=y_true,
         y_pred=y_pred,
         pred_var_name=pred_var,
-        title_suffix="Jitter-Modell @ all-zero",
+        title_suffix="All-zero-Modell @ all-zero",
         save_html=(
             plot_dir_3d_az
-            / f"{dataset_id}_{sid}_thalamus_lrp_3d_all_zero_model.html"
+            / f"{dataset_id}_{sid}_thalamus_lrp_3d_all_zero_trained_model.html"
         ),
     )
 
@@ -3028,7 +3142,9 @@ else:
 # (gleiche Orientierung wie A.7 / B.4):
 #
 # - **Top row:** input volumes — (1) normal brain, (2) jittered (right thalamus preserved), (3) all-zero except right thalamus
-# - **Bottom row:** corresponding **unnormalized** LRP heatmaps (original model; same files as A.7 / B.4 / D.4)
+# - **Bottom row:** corresponding **unnormalized** LRP heatmaps
+#   - Spalten (1)/(2): Original-Modell (A)
+#   - Spalte (3): **All-zero-Modell** `training_run_21h19m09s_09sep2026` (wie D.1 / D.4)
 #
 # Jede LRP-Panel hat eine **eigene Colorbar** mit `vmax = max|R|` dieses Heatmaps
 # (keine gemeinsame Skala mit all-zero — sonst wirken normal/jittered „leer“).
@@ -3084,6 +3200,28 @@ def _ensure_lrp_heatmap(volume_path: Path, heatmap_path: Path) -> Path:
     print(f"computing LRP heatmap → {heatmap_path}")
     vol = load_volume(str(volume_path))
     R = lrp(np.expand_dims(vol, 0))[0].numpy()
+    save_heatmap_nifti(R, str(volume_path), heatmap_path)
+    return heatmap_path
+
+
+def _ensure_all_zero_lrp_heatmap(volume_path: Path, heatmap_path: Path) -> Path:
+    """Compute+save LRP with All-zero-Modell (D.1), always overwrite.
+
+    Avoids reusing stale heatmaps that were written with the original model.
+    """
+    if "_ensure_all_zero_model" not in globals():
+        raise RuntimeError("D.1 zuerst ausführen (_ensure_all_zero_model fehlt).")
+    az_model = _ensure_all_zero_model()
+    az_lrp = LRP(
+        az_model,
+        layer=len(az_model.layers) - 1,
+        idx=0,
+        strategy=strategy,
+    )
+    heatmap_path = Path(heatmap_path)
+    print(f"computing all-zero-model LRP → {heatmap_path}")
+    vol = load_volume(str(volume_path))
+    R = az_lrp(np.expand_dims(vol, 0))[0].numpy()
     save_heatmap_nifti(R, str(volume_path), heatmap_path)
     return heatmap_path
 
@@ -3167,14 +3305,14 @@ path_az = az_by_id[summary_sid]
 hm_norm, hm_jit, hm_az = _heatmap_paths(summary_sid)
 n_ready_hm = sum(p.is_file() for p in (hm_norm, hm_jit, hm_az))
 
-for vol_path, hm_path in (
-    (path_norm, hm_norm),
-    (path_jit, hm_jit),
-    (path_az, hm_az),
-):
+for vol_path, hm_path in ((path_norm, hm_norm), (path_jit, hm_jit)):
     if not vol_path.is_file():
         raise FileNotFoundError(f"Volume missing: {vol_path}")
     _ensure_lrp_heatmap(vol_path, hm_path)
+if not path_az.is_file():
+    raise FileNotFoundError(f"Volume missing: {path_az}")
+# Rechte Spalte: All-zero-Modell (wie D.1 / D.4), nicht Original-Modell.
+_ensure_all_zero_lrp_heatmap(path_az, hm_az)
 
 right_mask_path = _right_mask_for(summary_sid, path_jit.parent, path_az.parent)
 print(
@@ -3190,24 +3328,30 @@ heat_jit = _load_vol_summary(hm_jit)
 heat_az = _load_vol_summary(hm_az)
 right = _load_vol_summary(right_mask_path) > 0
 
-# True label (same for all three inputs) + original-model predictions per input.
+# True label (same for all three inputs).
+# Predictions: original model for normal/jittered; all-zero model for all-zero column.
 _df_true = pd.read_csv(UKB_HOLDOUT_PREDICT_TSV, sep=None, engine="python")
 _id_col = next(c for c in ("subject-id", "participant_id", "Subject") if c in _df_true.columns)
 _row_true = _df_true.loc[_df_true[_id_col].astype(str) == summary_sid].iloc[0]
 y_true = float(_row_true[pred_var])
 
-def _predict_path(path: Path) -> float:
+def _predict_path(path: Path, keras_model) -> float:
     vol = load_volume(str(path))
-    return float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
+    return float(np.squeeze(keras_model.predict(np.expand_dims(vol, 0), verbose=0)))
 
-y_pred_norm = _predict_path(path_norm)
-y_pred_jit = _predict_path(path_jit)
-y_pred_az = _predict_path(path_az)
+if "_ensure_all_zero_model" not in globals():
+    raise RuntimeError("D.1 zuerst ausführen (_ensure_all_zero_model fehlt).")
+all_zero_model_e = _ensure_all_zero_model()
+
+y_pred_norm = _predict_path(path_norm, model)
+y_pred_jit = _predict_path(path_jit, model)
+y_pred_az = _predict_path(path_az, all_zero_model_e)
 print(
     f"true={y_true:.1f}  "
     f"pred_normal={y_pred_norm:.1f}  "
     f"pred_jittered={y_pred_jit:.1f}  "
-    f"pred_all_zero={y_pred_az:.1f}"
+    f"pred_all_zero_model={y_pred_az:.1f}  "
+    f"(model={globals().get('ALL_ZERO_MODEL_RUN_DIR', 'all-zero')})"
 )
 
 cx = int(np.clip(SUMMARY_SAGITTAL_X, 0, vol_norm.shape[0] - 1))
@@ -3234,12 +3378,12 @@ print(
 top_titles = [
     f"Normal brain (holdout)\ntrue={y_true:.0f}  predicted={y_pred_norm:.0f}",
     f"Jittered (right thalamus preserved)\ntrue={y_true:.0f}  predicted={y_pred_jit:.0f}",
-    f"All-zero except right thalamus\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
+    f"All-zero model @ all-zero input\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
 ]
 bottom_titles = [
     f"LRP — normal input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_norm:.0f}",
     f"LRP — jittered input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_jit:.0f}",
-    f"LRP — all-zero input (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
+    f"LRP — all-zero model (unnormalized)\ntrue={y_true:.0f}  predicted={y_pred_az:.0f}",
 ]
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 8.5))
@@ -3302,7 +3446,7 @@ fig.legend(
             [],
             [],
             linestyle="none",
-            label=f"All-zero: true={y_true:.0f}, predicted={y_pred_az:.0f}",
+            label=f"All-zero model: true={y_true:.0f}, predicted={y_pred_az:.0f}",
         ),
     ],
     loc="lower center",
@@ -3340,6 +3484,3 @@ if SHOW_PLOTS_INLINE:
 plt.close(fig)
 
 
-# %%
-
-# %%
