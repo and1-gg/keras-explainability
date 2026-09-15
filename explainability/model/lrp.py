@@ -7,7 +7,7 @@ from typing import Union
 
 from .utils import fuse_batchnorm, remove_activation
 from ..layers import get_lrp_layer, PoolingLRPLayer, StandardLRPLayer
-from ..utils import infer_graph_structure, topological_sort
+from ..utils import infer_graph_structure, topological_sort, tensor_key
 from ..utils.strategies import LRPStrategy
 
 
@@ -57,7 +57,7 @@ class LayerwiseRelevancePropagator(Model):
         )([mask, output, zeros])
 
         relevances = {
-            output.name: masked_output
+            tensor_key(output): masked_output
         }
 
         layers = [model.layers[i] for i in order]
@@ -77,7 +77,7 @@ class LayerwiseRelevancePropagator(Model):
                 if isinstance(layers[i + 1], Dense):
                     inputs = layers[i + 1].input
                     outputs = layer.output
-                    R = relevances[outputs.name]
+                    R = relevances[tensor_key(outputs)]
                     kwargs['norm'] = layer
                     layer = layers[i + 1]
                 else:
@@ -89,7 +89,7 @@ class LayerwiseRelevancePropagator(Model):
             else:
                 inputs = layer.input
                 outputs = layer.output
-                R = relevances[outputs.name]
+                R = relevances[tensor_key(outputs)]
                 i += 1
             relevance = get_lrp_layer(
                 layer,
@@ -112,17 +112,17 @@ class LayerwiseRelevancePropagator(Model):
                     if not isinstance(layer, InputLayer):
                         raise ValueError('Inputs is a nested list but layer '
                                          f'is not an InputLayer ({layer})')
-                    name = layer.name
+                    key = ("layer", layer.name)
                 else:
-                    name = inputs[j].name
+                    key = tensor_key(inputs[j])
 
-                relevances[name] = relevance[j]
+                relevances[key] = relevance[j]
 
         # Keras 3: model.inputs is always a list. Unwrap the common
         # single-input case so callers get a tensor, not [tensor].
         inputs = model.inputs
         input_list = inputs if isinstance(inputs, list) else [inputs]
-        outputs = [relevances[t.name] for t in input_list]
+        outputs = [relevances[tensor_key(t)] for t in input_list]
 
         if include_prediction:
             outputs = [original_output] + outputs

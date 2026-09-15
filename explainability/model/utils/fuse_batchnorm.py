@@ -69,9 +69,15 @@ def fuse_batchnorm(model: Model) -> Model:
         logger.warning(('Unable to clone Functional model. Original model '
                         'will be modified'))
     else:
-        clone = clone_model(model)
-        clone.set_weights(model.get_weights())
-        model = clone
+        try:
+            clone = clone_model(model)
+            clone.set_weights(model.get_weights())
+            model = clone
+        except Exception as exc:  # noqa: BLE001 — z. B. SFCN restrict_add / eager Tensor
+            logger.warning(
+                'Unable to clone model (%s). Original model will be modified',
+                exc,
+            )
 
 
     layers = model.layers
