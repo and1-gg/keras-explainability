@@ -10,9 +10,9 @@
 # trained model checkpoints / runs (large binaries)
 /trainings_runs/
 #output/notebooks/**/*.keras
-output/notebooks/**/*.png
-output/notebooks/**/*.html
-
+#output/notebooks/**/*.png
+#output/notebooks/**/*.html
+output/notebooks
 
 
 # ignore notebooks
