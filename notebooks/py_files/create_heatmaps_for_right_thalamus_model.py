@@ -49,7 +49,7 @@ from scipy.stats import pearsonr
 
 # %%
 RUN_DIR = Path(
-    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026"
     # "training_run_07h44m40s_01apr2026"
 ).expanduser().resolve()
@@ -882,7 +882,7 @@ import numpy as np
 # %matplotlib inline
 
 mask_path = Path(
-    "/mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026/heatmaps/ukb/5614724_20252_2_0/"
     #"5614724_20252_2_0_aseg_thalamus_mask_mni152_cropped.nii.gz"
     "aseg_mni152_right_thalamus_cropped.nii.gz"
@@ -1130,7 +1130,7 @@ import nibabel as nib
 import numpy as np
 
 base = Path(
-    "/mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026/heatmaps/ukb/5614724_20252_2_0"
 )
 heatmap_path = base / "lrp_heatmap_ukb_5614724_20252_2_0.nii.gz"

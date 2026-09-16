@@ -173,7 +173,7 @@ Bei doppelten IDs gewinnt die FastSurfer-LUT. Fallbacks im Notebook für IDs, di
 beiden Tabellen stehen: `0.0 → 'Background'`, `2.0 → 'WM'`, sonst wird die Zahl selbst angezeigt.
 
 Eine externe Datei wird dafür nicht mehr gebraucht. Frühere Versionen lasen hier
-`~/data/IXI/fastsurfer_labels.csv` — ein hart codierter Pfad außerhalb von `ixi_folder`, der auf
+`/mnt/ceph2/dl_project/data/IXI/fastsurfer_labels.csv` — ein hart codierter Pfad außerhalb von `ixi_folder`, der auf
 einer frischen Maschine zu einem `FileNotFoundError` führte.
 
 ---

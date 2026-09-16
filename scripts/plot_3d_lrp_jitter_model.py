@@ -36,11 +36,11 @@ from pybrainmetrics.modeling.train import _build_single_device_model  # noqa: E4
 
 # --- Pfade / Konfiguration ---------------------------------------------------
 ORIG_RUN_DIR = Path(
-    "/mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026"
 )
 JITTER_RUN_DIR = Path(
-    "/mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_05h09m52s_04sep2026"
 )
 UKB_HOLDOUT_PREDICT_TSV = Path(

@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -55,6 +55,11 @@
 # Übersichtsfigur (2×3) für ein UKB-Holdout-Subject, sagittal `x=70`:
 # normale / gejitterte / all-zero Inputs (oben) und korrespondierende LRP-Heatmaps (unten).
 #
+# **Teil F — Gruppen-LRP-Karte:**
+#
+# Anteil der Relevanz im rechten Thalamus: erstes UKB-Holdout-Subject vs.
+# `summary_subject` (Summe der pro Subject mit `|R|/max(|R|)` normierten Holdout-Heatmaps).
+#
 
 # %% [markdown]
 # ## A.1. Imports
@@ -91,7 +96,7 @@ from tqdm import tqdm
 
 # %%
 RUN_DIR = Path(
-    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026"
 ).expanduser().resolve()
 
@@ -1479,7 +1484,7 @@ for dataset_id in DATASETS:
 # `UKB_JITTERED_PREDICT_TSV`, mit dem auf **gejitterten** Volumes trainierten Modell
 #
 # ```
-# /mnt/users/andreasre/data/nn-trainings/mri/Right-Whole_thalamus/
+# /mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/
 #     training_run_05h09m52s_04sep2026
 # ```
 #
@@ -1492,7 +1497,7 @@ for dataset_id in DATASETS:
 
 # %%
 JITTER_MODEL_RUN_DIR = Path(
-    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_05h09m52s_04sep2026"
 ).expanduser().resolve()
 JITTER_MODEL_PATH = JITTER_MODEL_RUN_DIR / "model.keras"
@@ -1624,7 +1629,7 @@ print("Volume:", _jitter_path0)
 # Sanity-Check für das **Simulations-/Jitter-Framework**: In den Dateien
 #
 # ```
-# /mnt/users/andreasre/data/mri-scans/jittered_data/ukb/recon/<subject-id>/mri/
+# /mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon/<subject-id>/mri/
 #     T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz
 # ```
 #
@@ -1649,7 +1654,7 @@ print("Volume:", _jitter_path0)
 
 # %%
 # --- Jitter-Konfiguration (nur ukb) --------------------------------------
-JITTER_ROOT = Path("/mnt/users/andreasre/data/mri-scans/jittered_data")
+JITTER_ROOT = Path("/mnt/ceph2/dl_project/data/mri-scans/jittered_data")
 JITTER_DATASET = "ukb"
 JITTER_FILENAME = "T1_mni152_right_thalamus_preserved_others_shuffled.nii.gz"
 JITTER_MASK_LEFT_NAME = "aseg_mni152_left_thalamus_cropped.nii.gz"
@@ -1882,7 +1887,7 @@ display(pd.DataFrame(qc_rows))
 # Predict-Volume (Pfad aus der TSV), z. B.
 #
 # ```
-# ~/data/mri-scans/jittered_data/.../ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
+# /mnt/ceph2/dl_project/data/mri-scans/jittered_data/.../ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
 # ```
 #
 # → Overlay (Schnitte wie A.7). Masken: neben dem Jitter-Volume, sonst Fallback aus A.7.
@@ -2099,7 +2104,7 @@ def _ensure_jitter_model():
     if "jitter_model" in globals() and globals()["jitter_model"] is not None:
         return globals()["jitter_model"]
     run_dir = Path(
-        "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+        "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
         "training_run_05h09m52s_04sep2026"
     ).expanduser().resolve()
     model_path = run_dir / "model.keras"
@@ -2649,7 +2654,7 @@ print("Erstes Volume:", df_ukb_all_zero.iloc[0]["filepath"])
 
 # All-zero-Modell (eigenständiger Run — nicht JITTER_MODEL_RUN_DIR / B.1).
 ALL_ZERO_MODEL_RUN_DIR = Path(
-    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m09s_09sep2026"
 ).expanduser().resolve()
 ALL_ZERO_MODEL_PATH = ALL_ZERO_MODEL_RUN_DIR / "model.keras"
@@ -2765,7 +2770,7 @@ print(
 # ## D.3. QC der all-zero UKB-Volumes (Nicht-Holdout)
 #
 # Analog zu **B.3**: zufällige Nicht-Holdout-Subjects unter
-# `/mnt/users/andreasre/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/`.
+# `/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/`.
 #
 # Numerischer QC vs. Original-`cropped.nii.gz`: Korrelation **innerhalb** der rechten
 # Thalamus-Maske (≈ 1) und Anteil Nicht-Null-Voxel **außerhalb** (≈ 0).
@@ -2773,7 +2778,7 @@ print(
 
 # %%
 ALL_ZERO_ROOT = Path(
-    "/mnt/users/andreasre/data/mri-scans/only_brain_regions/right-thalamus"
+    "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/right-thalamus"
 )
 ALL_ZERO_DATASET = "ukb"
 ALL_ZERO_RECON_DIR = ALL_ZERO_ROOT / ALL_ZERO_DATASET / "recon"
@@ -2909,7 +2914,7 @@ display(pd.DataFrame(az_qc_rows))
 # `mri/`-Ordner wie das Predict-Volume, z. B.
 #
 # ```
-# ~/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
+# /mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/right-thalamus/ukb/recon/<subject-id>/mri/heatmap_mni152.nii.gz
 # ```
 #
 
@@ -3479,6 +3484,462 @@ print("  normal:  ", hm_norm)
 print("  jittered:", hm_jit)
 print("  all-zero:", hm_az)
 
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+
+# %% [markdown]
+# ## F. Gruppen-LRP-Karte
+#
+# Frage: **welcher Anteil der Gesamtrelevanz liegt im rechten Thalamus?**
+#
+# Vergleich **ein** UKB-Holdout-Subject (erste Zeile von `UKB_HOLDOUT_PREDICT_TSV`)
+# gegen das **`summary_subject`**, das der SLURM-Job
+#
+# `pyment-and1/scripts/slurm/generate_LRP_heatmaps_for_right_thalamus_experiments_main.bash`
+#
+# aus allen Holdout-Fällen baut:
+#
+# - individuelle Heatmaps: unnormiert (`lrp_heatmap.nii.gz`)
+# - Gruppenheatmap: je Subject \(|R| / \max(|R|)\), dann Summe
+# - Summenmaske: binäre rechte-Thalamus-Masken aufaddiert und durch \(n\) geteilt
+#
+# Metrik (für Subject und Gruppe identisch):
+#
+# \[
+# \%R_{\text{Thalamus}} = 100 \cdot \frac{\sum |R| \cdot \mathbf{1}_{\text{rechter Thalamus}}}{\sum |R|}
+# \]
+#
+# Beim Summary-Subject ist \(R\) bereits nichtnegativ (Betrags-Normierung vor dem Aufaddieren).
+# Die Summenmaske wird bei \(> 0.5\) binarisiert (Voxel, die in der Mehrheit der Subjects
+# im rechten Thalamus liegen). Fallback: \(> 0\).
+#
+
+# %%
+from matplotlib.patches import Patch
+
+GROUP_LRP_EXPERIMENTS: dict[str, dict[str, Path]] = {
+    "not_altered": {
+        "label": "unverändert",
+        "heatmap_root": Path("/mnt/ceph2/dl_project/data/mri-scans/not_altered/ukb/recon"),
+        "summary_heatmap": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/not_altered/ukb/recon/"
+            "summary_subject/mri/lrp_heatmap.nii.gz"
+        ),
+        "summary_mask": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/not_altered/ukb/"
+            "summary_subject/mri/aseg_mni152_right_thalamus.nii.gz"
+        ),
+        "predict_tsv": UKB_HOLDOUT_PREDICT_TSV,
+    },
+    "jittered": {
+        "label": "gejittert (rechter Thalamus erhalten)",
+        "heatmap_root": Path("/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon"),
+        "summary_heatmap": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon/"
+            "summary_subject/mri/lrp_heatmap.nii.gz"
+        ),
+        "summary_mask": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/"
+            "summary_subject/mri/aseg_mni152_right_thalamus.nii.gz"
+        ),
+        "predict_tsv": UKB_JITTERED_PREDICT_TSV,
+    },
+    "only_right_thalamus": {
+        "label": "nur rechter Thalamus (Rest = 0)",
+        "heatmap_root": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/recon"
+        ),
+        "summary_heatmap": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/recon/"
+            "summary_subject/mri/lrp_heatmap.nii.gz"
+        ),
+        "summary_mask": Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/"
+            "summary_subject/mri/aseg_mni152_right_thalamus.nii.gz"
+        ),
+        "predict_tsv": UKB_ALL_ZERO_PREDICT_TSV,
+    },
+}
+
+GROUP_SAGITTAL_X = int(globals().get("SUMMARY_SAGITTAL_X", 70))
+GROUP_MASK_THRESHOLD = 0.5
+CROP_SLICES_F = (slice(6, 173), slice(2, 214), slice(0, 160))
+HEATMAP_SHAPE_F = (167, 212, 160)
+MNI152_SHAPE_F = (182, 218, 182)
+COLOR_RIGHT_F = (0.15, 0.65, 0.25, 0.40)
+
+
+def _group_load_nii(path: Path) -> np.ndarray:
+    return np.asarray(nib.load(str(path)).get_fdata(), dtype=np.float32).squeeze()
+
+
+def _group_crop_to_fov(data: np.ndarray) -> np.ndarray:
+    arr = np.asarray(data, dtype=np.float32).squeeze()
+    if arr.shape == HEATMAP_SHAPE_F:
+        return arr
+    if arr.shape == MNI152_SHAPE_F:
+        return arr[CROP_SLICES_F]
+    raise ValueError(
+        f"Unerwartete Shape {arr.shape} (erwartet {HEATMAP_SHAPE_F} oder {MNI152_SHAPE_F})"
+    )
+
+
+def _group_binarize_mask(
+    data: np.ndarray, *, threshold: float = GROUP_MASK_THRESHOLD
+) -> np.ndarray:
+    arr = np.asarray(data, dtype=np.float32).squeeze()
+    if float(np.nanmax(arr)) <= 1.0 + 1e-6:
+        thr = threshold if float(np.nanmax(arr)) > threshold else 0.0
+        return arr > thr
+    return arr > 0
+
+
+def _pct_abs_in_mask(heat: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    heat = np.asarray(heat, dtype=np.float32).squeeze()
+    mask_b = np.asarray(mask, dtype=bool).squeeze()
+    if heat.shape != mask_b.shape:
+        raise ValueError(f"Shape-Mismatch Heatmap {heat.shape} vs Maske {mask_b.shape}")
+    abs_heat = np.abs(heat)
+    sum_abs = float(np.sum(abs_heat))
+    sum_abs_in = float(np.sum(abs_heat[mask_b]))
+    sum_signed = float(np.sum(heat))
+    sum_signed_in = float(np.sum(heat[mask_b]))
+    n_mask = int(mask_b.sum())
+    return {
+        "sum_|R|": sum_abs,
+        "sum_|R|_thalamus": sum_abs_in,
+        "pct_|R|_thalamus": (100.0 * sum_abs_in / sum_abs) if sum_abs > 0 else float("nan"),
+        "sum_R": sum_signed,
+        "sum_R_thalamus": sum_signed_in,
+        "pct_R_thalamus": (
+            100.0 * sum_signed_in / sum_signed if sum_signed != 0 else float("nan")
+        ),
+        "n_thalamus_voxels": n_mask,
+    }
+
+
+def _first_ukb_holdout_subject_id() -> str:
+    if "dataset_labels" in globals() and "ukb" in dataset_labels and len(dataset_labels["ukb"]):
+        row = dataset_labels["ukb"].iloc[0]
+        return str(row.get("participant_id", row.get("subject-id")))
+    df = pd.read_csv(UKB_HOLDOUT_PREDICT_TSV, sep=None, engine="python")
+    id_col = next(
+        c for c in ("subject-id", "participant_id", "Subject") if c in df.columns
+    )
+    return str(df.iloc[0][id_col])
+
+
+def _subject_heatmap_candidates(exp_key: str, exp: dict[str, Path], sid: str) -> list[Path]:
+    root = Path(exp["heatmap_root"])
+    mri = root / sid / "mri"
+    cands = [mri / "lrp_heatmap.nii.gz", mri / "heatmap_mni152.nii.gz"]
+    if exp_key == "not_altered":
+        cands.append(RUN_DIR / "heatmaps" / "ukb" / sid / f"lrp_heatmap_ukb_{sid}.nii.gz")
+    if exp_key == "jittered":
+        cands.append(
+            Path("/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon")
+            / sid
+            / "mri"
+            / "heatmap_mni152.nii.gz"
+        )
+    if exp_key == "only_right_thalamus":
+        base = Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/"
+            "right-thalamus/ukb/recon"
+        ) / sid / "mri"
+        cands.append(base / "heatmap_mni152.nii.gz")
+        cands.append(base / "lrp_heatmap.nii.gz")
+    return cands
+
+
+def _subject_mask_candidates(sid: str) -> list[Path]:
+    names = (
+        "aseg_mni152_right_thalamus_cropped.nii.gz",
+        "aseg_mni152_right_thalamus.nii.gz",
+    )
+    roots = [
+        Path("/mnt/ceph2/dl_project/data/mri-scans/not_altered/ukb/recon"),
+        Path("/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon"),
+        Path(
+            "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/"
+            "right-thalamus/ukb/recon"
+        ),
+        Path("/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/recon"),
+        RUN_DIR / "heatmaps" / "ukb",
+    ]
+    cands: list[Path] = []
+    for root in roots:
+        mri = root / sid if root == RUN_DIR / "heatmaps" / "ukb" else root / sid / "mri"
+        for name in names:
+            cands.append(mri / name)
+    return cands
+
+
+def _first_existing(paths: list[Path]) -> Path | None:
+    for p in paths:
+        if p is not None and Path(p).is_file():
+            return Path(p)
+    return None
+
+
+group_sid = _first_ukb_holdout_subject_id()
+print(f"F. erstes UKB-Holdout-Subject: {group_sid}")
+print(f"   (predict.tsv: {UKB_HOLDOUT_PREDICT_TSV})")
+
+
+# %%
+group_rows: list[dict[str, object]] = []
+group_loaded: dict[str, dict[str, object]] = {}
+
+for exp_key, exp in GROUP_LRP_EXPERIMENTS.items():
+    hm_subj = _first_existing(_subject_heatmap_candidates(exp_key, exp, group_sid))
+    mask_subj = _first_existing(_subject_mask_candidates(group_sid))
+    hm_sum = Path(exp["summary_heatmap"])
+    mask_sum = Path(exp["summary_mask"])
+
+    status_subj = "ok" if hm_subj and mask_subj else "fehlend"
+    status_sum = "ok" if hm_sum.is_file() and mask_sum.is_file() else "fehlend"
+
+    rec: dict[str, object] = {
+        "experiment": exp_key,
+        "label": exp["label"],
+        "subject_id": group_sid,
+        "status_subject": status_subj,
+        "status_summary": status_sum,
+        "heatmap_subject": str(hm_subj) if hm_subj else "",
+        "mask_subject": str(mask_subj) if mask_subj else "",
+        "heatmap_summary": str(hm_sum) if hm_sum.is_file() else "",
+        "mask_summary": str(mask_sum) if mask_sum.is_file() else "",
+        "pct_|R|_thalamus_subject": np.nan,
+        "pct_|R|_thalamus_summary": np.nan,
+        "delta_pp_summary_minus_subject": np.nan,
+        "n_thalamus_voxels_subject": np.nan,
+        "n_thalamus_voxels_summary": np.nan,
+    }
+
+    packed: dict[str, object] = {"exp": exp}
+
+    if hm_subj and mask_subj:
+        heat = _group_load_nii(hm_subj)
+        mask = _group_binarize_mask(
+            _group_crop_to_fov(_group_load_nii(mask_subj)), threshold=0.0
+        )
+        stats = _pct_abs_in_mask(heat, mask)
+        rec["pct_|R|_thalamus_subject"] = stats["pct_|R|_thalamus"]
+        rec["n_thalamus_voxels_subject"] = stats["n_thalamus_voxels"]
+        rec["sum_|R|_subject"] = stats["sum_|R|"]
+        rec["sum_|R|_thalamus_subject"] = stats["sum_|R|_thalamus"]
+        packed.update(
+            {
+                "heat_subject": np.abs(heat),
+                "mask_subject": mask,
+                "stats_subject": stats,
+            }
+        )
+        print(
+            f"[{exp_key}] {group_sid}:  "
+            f"{stats['pct_|R|_thalamus']:.2f}% der |R|-Summe im rechten Thalamus  "
+            f"({stats['sum_|R|_thalamus']:.4g} / {stats['sum_|R|']:.4g})"
+        )
+    else:
+        print(
+            f"[{exp_key}] {group_sid}: Heatmap oder Maske fehlt "
+            f"(hm={hm_subj}, mask={mask_subj})"
+        )
+
+    if hm_sum.is_file() and mask_sum.is_file():
+        heat_g = _group_load_nii(hm_sum)
+        mask_g = _group_binarize_mask(_group_crop_to_fov(_group_load_nii(mask_sum)))
+        stats_g = _pct_abs_in_mask(heat_g, mask_g)
+        rec["pct_|R|_thalamus_summary"] = stats_g["pct_|R|_thalamus"]
+        rec["n_thalamus_voxels_summary"] = stats_g["n_thalamus_voxels"]
+        rec["sum_|R|_summary"] = stats_g["sum_|R|"]
+        rec["sum_|R|_thalamus_summary"] = stats_g["sum_|R|_thalamus"]
+        packed.update(
+            {
+                "heat_summary": heat_g,
+                "mask_summary": mask_g,
+                "stats_summary": stats_g,
+            }
+        )
+        print(
+            f"[{exp_key}] summary_subject:  "
+            f"{stats_g['pct_|R|_thalamus']:.2f}% der |R|-Summe im rechten Thalamus  "
+            f"({stats_g['sum_|R|_thalamus']:.4g} / {stats_g['sum_|R|']:.4g})"
+        )
+    else:
+        print(
+            f"[{exp_key}] summary_subject fehlt — SLURM-Job "
+            f"generate_LRP_heatmaps_for_right_thalamus_experiments_main.bash "
+            f"(STAGE=summary) zuerst laufen lassen.\n"
+            f"  heatmap: {hm_sum}\n  mask:    {mask_sum}"
+        )
+
+    subj_pct = rec["pct_|R|_thalamus_subject"]
+    sum_pct = rec["pct_|R|_thalamus_summary"]
+    if (
+        isinstance(subj_pct, (int, float))
+        and isinstance(sum_pct, (int, float))
+        and np.isfinite(subj_pct)
+        and np.isfinite(sum_pct)
+    ):
+        rec["delta_pp_summary_minus_subject"] = float(sum_pct) - float(subj_pct)
+        print(
+            f"[{exp_key}] Differenz (Gruppe − Subject): "
+            f"{rec['delta_pp_summary_minus_subject']:+.2f} Prozentpunkte"
+        )
+
+    group_rows.append(rec)
+    group_loaded[exp_key] = packed
+
+group_compare_df = pd.DataFrame(group_rows)
+display_cols = [
+    "experiment",
+    "subject_id",
+    "pct_|R|_thalamus_subject",
+    "pct_|R|_thalamus_summary",
+    "delta_pp_summary_minus_subject",
+    "n_thalamus_voxels_subject",
+    "n_thalamus_voxels_summary",
+    "status_subject",
+    "status_summary",
+]
+display(group_compare_df[display_cols].round(3))
+
+group_plot_dir = (
+    keras_xai_root
+    / "output"
+    / "notebooks"
+    / "analysis_LRP_for_right_thalamus_volume_based_on_CNN_prediction"
+    / "group_lrp"
+)
+group_plot_dir.mkdir(parents=True, exist_ok=True)
+group_tsv = group_plot_dir / f"thalamus_relevance_share_{group_sid}_vs_summary.tsv"
+group_compare_df.to_csv(group_tsv, sep="\t", index=False, float_format="%.6f")
+print("gespeichert:", group_tsv)
+
+
+# %%
+# Balkendiagramm: Anteil |R| im rechten Thalamus, Subject vs. Gruppe.
+
+plot_df = group_compare_df.copy()
+has_any = (
+    plot_df["pct_|R|_thalamus_subject"].notna().any()
+    or plot_df["pct_|R|_thalamus_summary"].notna().any()
+)
+if not has_any:
+    print("Keine Werte zum Plotten (Heatmaps/Summary fehlen).")
+else:
+    labels = [GROUP_LRP_EXPERIMENTS[k]["label"] for k in plot_df["experiment"]]
+    x = np.arange(len(plot_df))
+    width = 0.36
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    ax.bar(
+        x - width / 2,
+        plot_df["pct_|R|_thalamus_subject"].to_numpy(dtype=float),
+        width,
+        color="#4c78a8",
+        edgecolor="0.2",
+        label=f"Subject {group_sid}",
+    )
+    ax.bar(
+        x + width / 2,
+        plot_df["pct_|R|_thalamus_summary"].to_numpy(dtype=float),
+        width,
+        color="#f58518",
+        edgecolor="0.2",
+        label="summary_subject (Holdout-Gruppe)",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("% der |LRP|-Summe im rechten Thalamus")
+    ax.set_ylim(0, 100)
+    ax.set_title("F. Relevanzanteil im rechten Thalamus — ein Subject vs. Gruppe")
+    ax.legend(frameon=False, fontsize=9)
+    ax.axhline(50, color="0.6", ls=":", lw=0.8)
+    fig.tight_layout()
+    bar_path = group_plot_dir / f"pct_R_thalamus_{group_sid}_vs_summary.png"
+    fig.savefig(bar_path, dpi=130, bbox_inches="tight")
+    print("gespeichert:", bar_path)
+    if SHOW_PLOTS_INLINE:
+        display(fig)
+    plt.close(fig)
+
+
+# %%
+# Sagittal-Overlay: |R| des Subjects (normiert) vs. Gruppenheatmap, rechter Thalamus grün.
+
+def _rgba_mask_f(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
+    out = np.zeros((*mask_slc.shape, 4), dtype=np.float32)
+    out[mask_slc] = rgba
+    return out
+
+
+n_exp = len(GROUP_LRP_EXPERIMENTS)
+fig, axes = plt.subplots(n_exp, 2, figsize=(10.5, 3.4 * n_exp))
+if n_exp == 1:
+    axes = np.atleast_2d(axes)
+fig.suptitle(
+    f"F. Gruppen-LRP  ·  UKB {group_sid} vs. summary_subject  ·  sagittal x={GROUP_SAGITTAL_X}",
+    fontsize=12,
+)
+
+for row, (exp_key, exp) in enumerate(GROUP_LRP_EXPERIMENTS.items()):
+    packed = group_loaded[exp_key]
+    for col, kind in enumerate(("subject", "summary")):
+        ax = axes[row, col]
+        heat = packed.get(f"heat_{kind}")
+        mask = packed.get(f"mask_{kind}")
+        pct = group_compare_df.loc[
+            group_compare_df["experiment"] == exp_key,
+            f"pct_|R|_thalamus_{kind}",
+        ]
+        pct_val = float(pct.iloc[0]) if len(pct) and np.isfinite(pct.iloc[0]) else np.nan
+        if heat is None or mask is None:
+            ax.set_facecolor("0.93")
+            ax.text(
+                0.5,
+                0.5,
+                f"{exp['label']}\n{kind}\nnicht vorhanden",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=10,
+            )
+            ax.axis("off")
+            continue
+        heat = np.asarray(heat, dtype=np.float32).squeeze()
+        mask_b = np.asarray(mask, dtype=bool).squeeze()
+        cx = int(np.clip(GROUP_SAGITTAL_X, 0, heat.shape[0] - 1))
+        slc = np.rot90(heat[cx])
+        vmax = float(np.nanmax(slc)) or 1.0
+        ax.imshow(slc, cmap="hot", vmin=0.0, vmax=vmax)
+        ax.imshow(
+            _rgba_mask_f(np.rot90(mask_b[cx]), COLOR_RIGHT_F), interpolation="nearest"
+        )
+        who = group_sid if kind == "subject" else "summary_subject"
+        ax.set_title(
+            f"{exp['label']}\n{who}  ·  {pct_val:.1f}% |R| im Thalamus",
+            fontsize=9,
+        )
+        ax.axis("off")
+
+fig.legend(
+    handles=[
+        Patch(facecolor=COLOR_RIGHT_F, edgecolor="none", label="rechter Thalamus")
+    ],
+    loc="lower center",
+    frameon=False,
+    fontsize=9,
+)
+fig.tight_layout(rect=[0, 0.04, 1, 0.96])
+overlay_path = (
+    group_plot_dir / f"overlay_sagittal_x{GROUP_SAGITTAL_X}_{group_sid}_vs_summary.png"
+)
+fig.savefig(overlay_path, dpi=130, bbox_inches="tight")
+print("gespeichert:", overlay_path)
 if SHOW_PLOTS_INLINE:
     display(fig)
 plt.close(fig)

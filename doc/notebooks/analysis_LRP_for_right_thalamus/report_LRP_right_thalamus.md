@@ -7,8 +7,8 @@
 | ------------------- | ----------------------------------------------------------------------------- |
 | Zielvariable        | `Right-Whole_thalamus` (mm³), Wertebereich der Config 4000–10000              |
 | Architektur         | `sfcn-reg`, Input-FOV `167×212×160`, MNI152-1mm-Raum                          |
-| **Original-Modell** | `~/data/nn-trainings/mri/Right-Whole_thalamus/training_run_21h19m18s_20aug2026` (auf unmanipulierten Volumes trainiert)    |
-| **Jitter-Modell**   | `~/data/nn-trainings/mri/Right-Whole_thalamus/training_run_05h09m52s_04sep2026` (auf gejitterten Volumes trainiert)        |
+| **Original-Modell** | `/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/training_run_21h19m18s_20aug2026` (auf unmanipulierten Volumes trainiert)    |
+| **Jitter-Modell**   | `/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/training_run_05h09m52s_04sep2026` (auf gejitterten Volumes trainiert)        |
 | Datensätze          | **IXI** (n = 10) und **UKB**-Holdout aus dem offiziellen predict-Split (n = 10) |
 | Traingsgröße        | jeweils 45k mit UKB Daten                                                     |
 

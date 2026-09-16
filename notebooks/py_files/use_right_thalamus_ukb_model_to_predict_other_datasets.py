@@ -60,7 +60,7 @@ from scipy.stats import pearsonr
 
 # %%
 RUN_DIR = Path(
-    "~/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
     "training_run_21h19m18s_20aug2026"
     # "training_run_07h44m40s_01apr2026"
 ).expanduser().resolve()
