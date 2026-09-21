@@ -1,4 +1,4 @@
-# CPU vs. GPU bei LRP-Heatmaps: MaxPooling-Bug und Fix
+# CPU vs. GPU bei LRP-Heatmaps: MaxPooling-Bug und zwei Lösungswege
 
 Dokumentation der Diagnose und Behebung der Device-Diskrepanz bei
 Layer-wise Relevance Propagation (LRP) für die Right-Thalamus-UKB-Modelle
@@ -12,6 +12,16 @@ Pool-Schicht vervielfacht sich die Relevanz dadurch um bis zu Faktor 8, über
 vier Schichten multiplikativ auf ~100×. Erschwerend kommt hinzu, dass der
 CPU-Kernel nicht bitgenau vergleicht, sondern mit einer absoluten Toleranz
 von ~`1e-5` (Abschnitt 3.4).
+
+**Zwei Lösungswege** (Abschnitte 7 und 9; Diagnose in 1–6 bleibt gültig):
+
+| | **Strategie A** — deterministisches WTA | **Strategie B** — Flat-Pooling |
+|---|---|---|
+| Eingriff | `pooling.py` umbauen (`tf.argmax` + `tf.one_hot`) | nur `LRPStrategy.pooling=…` setzen |
+| Alter Grad-Op | entfernt | bleibt |
+| Semantik | Winner-Takes-All bleibt | gleichmäßige Verteilung im Fenster |
+| `ΣR ≈ y_pred` | ja | ja |
+| Kartenoptik | scharf, wie bisherige GPU-Karten | flacher / verwaschener |
 
 ---
 
@@ -428,7 +438,7 @@ Damit bleibt: **Nur MaxPool und Conv bewegen Relevanz.** Deshalb konnte der Bug
 überhaupt nur an einer dieser beiden Stellen sitzen — und die layerweise
 Messung hat ihn dem MaxPool zugeordnet.
 
-### 4.3 Der vollständige Rückweg in Zahlen (gemessen, GPU, nach dem Fix)
+### 4.3 Der vollständige Rückweg in Zahlen (gemessen, GPU, Strategie A)
 
 Subject `IDX_PRED = 1`, Modell „unverändert", Input `(1, 167, 212, 160, 1)`.
 Forward-Ergebnis: **`y_pred = 7266.43 mm³`**. Dieser Wert wird
@@ -691,7 +701,7 @@ bis zu „dieser Op verhält sich bei Gleichstand geräteabhängig“.
 
 ### Schritt F — Fix und Verifikation
 
-Nach dem Umbau (Abschnitt 7) erneut CPU vs. GPU auf denselben Daten:
+Nach dem Umbau (Strategie A, Abschnitt 7) erneut CPU vs. GPU auf denselben Daten:
 
 | Metrik | vor Fix | nach Fix |
 |--------|---------|----------|
@@ -705,10 +715,13 @@ Unit-Tests für MaxPool-LRP (2D/3D, global, redistribute, flat) blieben grün.
 
 ---
 
-## 7. Was am Code geändert wurde
+## 7. Strategie A — deterministisches Winner-Takes-All in `pooling.py`
 
 Alles in `explainability/layers/pooling.py`. Die öffentliche API
 (`LRP(...)`, `LRPStrategy(...)`, Strategienamen) bleibt unverändert.
+Die Semantik bleibt Winner-Takes-All; nur das Routing wird geräteunabhängig.
+Das ist der „harte“ Fix, wenn scharfe Heatmaps und echte WTA-Semantik
+gewünscht sind.
 
 ### 7.1 Entfernt
 
@@ -1003,38 +1016,172 @@ trotzdem nicht:
   Heatmap wird dadurch systematisch verwaschen — genau der Effekt, den der
   gescheiterte Rescaling-Versuch aus Abschnitt 5.1 produziert hat.
 
-Deshalb war der API-Schalter keine Lösung: **Man hätte die Methode geändert,
-um einen Implementierungsfehler zu umgehen.** Der Fix stellt stattdessen
-`winner-takes-all` selbst deterministisch — die Semantik bleibt, nur das
+Deshalb war der API-Schalter **allein** keine Lösung, wenn man
+Winner-Takes-All *beibehalten* will: Man ändert die Methode, um einen
+Implementierungsfehler zu umgehen. Strategie A stellt deshalb
+`winner-takes-all` selbst deterministisch her — die Semantik bleibt, nur das
 Routing wird geräteunabhängig.
 
+**Will man den alten Grad-Op-Code behalten** und nur Conservation +
+Geräteunabhängigkeit sicherstellen, ist `flat` dagegen sehr wohl eine
+tragfähige Option — das ist **Strategie B** (Abschnitt 9). Man tauscht dann
+bewusst die WTA-Semantik gegen eine flachere Karte ein.
+
 ---
 
-## 9. Praktische Hinweise
+## 9. Strategie B — Flat-Pooling über `LRPStrategy` (alter Grad-Op bleibt)
 
-- Notebook-Kernel nach dem Fix **neu starten**. Nur die Zelle neu auszuführen
-  reicht nicht, weil das alte `pooling.py`-Modul im Speicher bleibt.
-- Schnellprüfung im Notebook:
+### 9.1 Idee
 
-  ```python
-  import explainability.layers.pooling as p
-  print(p.__file__)
-  print(hasattr(p, "_wta_nonoverlapping_3d"))   # muss True sein
-  ```
+Statt `MaxPool3DGrad` zu ersetzen, lässt man den alten Code in
+`pooling.py` unverändert und stellt die Pooling-LRP-Regel über die
+öffentliche API um:
 
-- Bitgenaue Identität CPU/GPU ist weiterhin nicht garantiert (Conv-Ops, andere
-  Reduktionsreihenfolge), aber die Heatmaps stimmen auf ~0.5 % überein.
+```text
+winner-takes-all  →  flat
+```
+
+`flat` ruft intern `_redistribute(tf.ones_like(a), R, …)` auf und läuft damit
+über `AvgPool3DGrad` / `AvgPoolGrad` — **kein Tie-Handler, kein
+Geräteunterschied**. Pro Fenster wird `R` gleichmäßig auf alle Voxel verteilt
+(`R/8` bei `2×2×2`). Die Summe bleibt konstruktionsbedingt erhalten.
+
+`redistribute` ist für denselben Zweck **ungeeignet**: In Nullfenstern
+(Aktivierungssumme 0) wird die gesamte Relevanz verworfen (Abschnitt 8.4).
+
+### 9.2 Python-Code (SFCN / Right-Thalamus)
+
+SFCN hat **6** Pooling-Schichten: fünf `MaxPooling3D` (vier mit `2×2×2`, eine
+Identity `1×1×1`) plus ein `GlobalAveragePooling3D`. Die Liste
+`pooling=[…]` braucht **genau einen Eintrag pro Pooling-Schicht**, in
+Forward-Reihenfolge (wie `layers`).
+
+```python
+from explainability import LRP, LRPStrategy
+
+# SFCN: 5× MaxPool3D + 1× GlobalAvgPool.
+# Flat-Pooling erhält ΣR geräteunabhängig
+# (WTA über MaxPool3DGrad inflatiert auf CPU bei Ties;
+#  redistribute verwirft Nullfenster).
+N_POOLING_LAYERS = 6
+
+LRP_STRATEGY = LRPStrategy(
+    layers=[
+        {"flat": True},
+        {"flat": True},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"epsilon": 0.25},
+    ],
+    pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
+)
+
+lrp = LRP(
+    model,
+    layer=len(model.layers) - 1,
+    idx=0,
+    strategy=LRP_STRATEGY,
+)
+R = lrp(x, training=False)
+```
+
+Erlaubte Werte für `strategy` in jedem Pooling-Eintrag:
+`'winner-takes-all'`, `'redistribute'`, `'flat'`.
+
+Im Notebook
+`check_LRP_heatmaps_for_3_different_right_thalamus_ukb_models` und dem
+zugehörigen `.py`-Script ist diese Konfiguration für `LRP_STRATEGY` und
+`LRP_STRATEGY_EPS_LARGE` gesetzt. Voraussetzung: `pooling.py` enthält wieder
+den **alten** Grad-Op-Pfad (Imports von `MaxPoolGradV2` / `MaxPool3DGrad`).
+
+### 9.3 Messung (alter Code, CPU)
+
+Gleiches Subject und dieselbe Layer-Konfiguration wie in Abschnitt 4:
+
+| Pooling-Strategie | `ΣR` | `ΣR / y_pred` | `max abs(R)` |
+|-------------------|------|---------------|--------------|
+| Default WTA (alter Grad-Op) | 782 013 | **107.6** ✗ | 1.72 |
+| **`flat` × 6** | 7 315 | **1.007** ✓ | 0.019 |
+
+Conservation ist wiederhergestellt; die Karte ist deutlich flacher als unter
+Strategie A / GPU-WTA (`max abs(R)` ≈ 0.02 statt ≈ 0.55). Das ist der
+erwartete Trade-off von Flat-Pooling, kein zweiter Bug.
+
+### 9.4 Wann Strategie B wählen?
+
+- Der Bibliothekscode (`pooling.py`) soll **unverändert** bleiben.
+- Es reicht, wenn CPU und GPU **dieselbe** (flachere) Karte liefern und
+  `ΣR ≈ y_pred` hält.
+- Scharfe Winner-Takes-All-Karten sind nicht nötig.
+
+Wenn die Heatmaps so scharf wie die bisherigen GPU-WTA-Karten sein sollen:
+**Strategie A** (Abschnitt 7).
+
+---
+
+## 10. Vergleich der beiden Strategien
+
+| Kriterium | A — deterministisches WTA | B — Flat über `LRPStrategy` |
+|-----------|---------------------------|-----------------------------|
+| Code-Änderung in der Library | ja (`pooling.py`) | nein |
+| Konfiguration im Notebook | optional | **pflicht** (`pooling=…`) |
+| Alter `MaxPool*Grad` | entfernt | bleibt |
+| Relevanzerhaltung | ja | ja |
+| CPU ≈ GPU | ja (~0.5 %) | ja (über denselben AvgPool-Pfad) |
+| Semantik | Winner-Takes-All | gleichmäßige Fensterverteilung |
+| `max abs(R)` (typisch) | ≈ 0.55 | ≈ 0.02 |
+| Optik | lokal, scharf | diffus / verwaschen |
+| Risiko bei anderem Padding | `NotImplementedError` bei `SAME` / overlapping | keine Einschränkung |
+
+Beide Strategien lösen das **Conservation-/Device-Problem**. Sie lösen
+unterschiedliche *Produkt*-Fragen: A hält die Erklärungsmethode fest, B hält
+den Library-Code fest.
+
+---
+
+## 11. Praktische Hinweise
+
+**Gemeinsam**
+
+- Notebook-Kernel nach Änderungen an `pooling.py` oder der Strategy **neu
+  starten**.
 - Abschnitte M und N im Notebook
-  `check_LRP_heatmaps_for_3_different_right_thalamus_ukb_models` enthalten den
-  Device-Vergleich und die Folgeanalysen (Conservation, layerweise `ΣR`,
+  `check_LRP_heatmaps_for_3_different_right_thalamus_ukb_models` enthalten
+  den Device-Vergleich und die Folgeanalysen (Conservation, layerweise `ΣR`,
   Leckage in Null-Voxel, Forward-Vergleich).
-- Für andere Architekturen mit `SAME`-Padding oder überlappenden Pool-Fenstern
-  muss `_winner_takes_all` erweitert werden — dort schlägt es aktuell bewusst
-  mit `NotImplementedError` fehl.
+- Bitgenaue Identität CPU/GPU ist auch nach dem Fix nicht garantiert
+  (Conv-Ops, Reduktionsreihenfolge); relevant ist Übereinstimmung der Karten
+  und `ΣR ≈ y_pred`.
+
+**Nur Strategie A**
+
+```python
+import explainability.layers.pooling as p
+print(p.__file__)
+print(hasattr(p, "_wta_nonoverlapping_3d"))   # muss True sein
+```
+
+Für Architekturen mit `SAME`-Padding oder überlappenden Pool-Fenstern muss
+`_winner_takes_all` erweitert werden — dort schlägt es bewusst mit
+`NotImplementedError` fehl.
+
+**Nur Strategie B**
+
+```python
+import explainability.layers.pooling as p
+from tensorflow.raw_ops import MaxPool3DGrad  # noqa: F401 — nur Existenzcheck
+# pooling.py muss MaxPoolGradV2 / MaxPool3DGrad importieren (alter Code)
+assert "MaxPool3DGrad" in open(p.__file__).read()
+
+# Anzahl der Pooling-Einträge == Anzahl der Pooling-Schichten im Modell
+assert len(LRP_STRATEGY.pooling) == N_POOLING_LAYERS
+```
 
 ---
 
-## 10. Kurzfassung
+## 12. Kurzfassung
 
 1. **Befund:** CPU-LRP wild, `ΣR` explodiert (Faktor 100–600), GPU-LRP
    plausibel, `dtype` auf beiden gleich.
@@ -1044,10 +1191,12 @@ Routing wird geräteunabhängig.
    CPU an alle Gewinner (bis ×8 je Schicht), auf der GPU nicht. Nach ReLU sind
    Nullregionen allgegenwärtig → Effekt multipliziert sich über vier Pools zu
    ~×108. „Gleichstand“ heißt dabei nicht bitgenau gleich, sondern innerhalb
-   einer absoluten Toleranz von ~`1e-5` — bei kleinen Aktivierungen also
-   relativ sehr großzügig.
-4. **Fix:** Eigenes Winner-Takes-All über `tf.argmax` + `tf.one_hot` statt der
-   TF-Gradient-Ops — deterministisch und summenerhaltend auf beiden Geräten.
-5. **Ergebnis:** CPU- und GPU-Karten stimmen auf 0.3–0.5 % überein;
-   `ΣR ≈ y_pred` auf beiden. Die zwischenzeitliche „stabile Division“ war
-   nicht die Lösung und wurde entfernt.
+   einer absoluten Toleranz von ~`1e-5`.
+4. **Zwei Lösungen:**
+   - **A:** Eigenes Winner-Takes-All über `tf.argmax` + `tf.one_hot` statt der
+     TF-Gradient-Ops — Semantik bleibt, Karten scharf, Library-Code ändert sich.
+   - **B:** Alten Grad-Op behalten und
+     `LRPStrategy(pooling=[{"strategy": "flat"}] * n_pools)` setzen —
+     Conservation und Geräteunabhängigkeit ohne Library-Umbau, Karten flacher.
+5. **Nicht die Lösung:** `redistribute` (verliert Relevanz in Nullfenstern),
+   `enable_op_determinism()`, `stable_divide`, nachträgliches `ΣR`-Rescaling.
