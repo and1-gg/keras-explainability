@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -24,7 +24,9 @@
 #
 # Ablauf: Vorhersagen für `N_SUBJ_PRED` Holdout-Subjects → Scatter/MAE/r →
 # für Subject `IDX_PRED` Input-Schnitte + neu berechnete unnormierte LRP-Heatmaps →
-# Gruppen-LRP über die ersten `N_GROUP` Subjects je Holdout-TSV (Sum-Norm).
+# Gruppen-LRP über die ersten `N_GROUP` Subjects je Holdout-TSV (Sum-Norm) →
+# CPU- vs. GPU-Vergleich der LRP-Heatmaps (Abschnitt M) →
+# Folgeanalysen zur Device-Diskrepanz (Abschnitt N).
 
 # %% [markdown]
 # ## A. Imports
@@ -340,6 +342,9 @@ def make_load_volume(cfg):
     return _load
 
 
+# SFCN: 5× MaxPool3D + 1× GlobalAvgPool. Flat-Pooling erhält ΣR geräteunabhängig
+# (WTA über MaxPool3DGrad inflatiert auf CPU bei Ties; redistribute verwirft Nullfenster).
+N_POOLING_LAYERS = 6
 LRP_STRATEGY = LRPStrategy(
     layers=[
         {"flat": True},
@@ -349,7 +354,8 @@ LRP_STRATEGY = LRPStrategy(
         {"alpha": 2, "beta": 1},
         {"alpha": 2, "beta": 1},
         {"epsilon": 0.25},
-    ]
+    ],
+    pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
 )
 
 models: dict[str, object] = {}
@@ -590,15 +596,42 @@ print(
 #
 # - Obere Reihe: Input-Intensität, sagittal `x=70`, rechte Thalamus-Maske in Grün
 #   (`alpha=0.5`), eigene Colorbar je Panel.
-# - Untere Reihe: unnormierte LRP-Relevanzen, eigene Colorbar je Panel.
+# - Untere Reihe: unnormierte LRP-Relevanzen, Colorbar je Panel mit
+#   `vmin/vmax = ±P99.5(|R|)` (wie Abschnitt M) — Spitzen werden gekappt, die
+#   Karten sind zwischen den Varianten besser vergleichbar. `|R|_max` bleibt
+#   im Titel als echte Peak-Größe.
 # - In jedem Panel: Subject-ID, wahres und prädiziertes Volumen.
+#
+# **Anteil im / außerhalb des rechten Thalamus** (unnormiertes LRP;
+# Gesamtrelevanz $\sum_i R_i \approx$ vorhergesagtes Volumen wegen Relevanzerhaltung).
+# Außerhalb: Summe über alle Voxel **nicht** in der rechten Thalamus-Maske:
+#
+# $$
+# \%R_{\mathrm{Thal}}
+# = 100 \cdot
+# \frac{\sum_{i \in \mathrm{Thalamus}} R_i}{\sum_i R_i}
+# \qquad
+# \%R_{\mathrm{out}}
+# = 100 \cdot
+# \frac{\sum_{i \notin \mathrm{Thalamus}} R_i}{\sum_i R_i}
+# $$
 
 # %%
-fig, axes = plt.subplots(2, 3, figsize=(14.5, 8.8))
+fig, axes = plt.subplots(2, 3, figsize=(14.5, 9.6))
 fig.suptitle(
-    f"Subject {subject_id_plot}  ·  IDX_PRED={IDX_PRED}/{N_SUBJ_PRED}  ·  "
-    f"sagittal x={cx}",
-    fontsize=12,
+    (
+        f"Subject {subject_id_plot}  ·  IDX_PRED={IDX_PRED}/{N_SUBJ_PRED}  ·  "
+        f"sagittal x={cx}\n"
+        + r"$\%R_{\mathrm{Thal}}="
+        r"100\cdot"
+        r"(\sum_{i\in\mathrm{Thal}} R_i)/(\sum_i R_i)$"
+        r"$\quad"
+        r"\%R_{\mathrm{out}}="
+        r"100\cdot"
+        r"(\sum_{i\notin\mathrm{Thal}} R_i)/(\sum_i R_i)$"
+        r"$\quad(\sum_i R_i\approx$ Pred.-Volumen, unnormiert$)$"
+    ),
+    fontsize=11,
 )
 
 keys = list(DATASETS.keys())
@@ -626,11 +659,24 @@ for col, key in enumerate(keys):
     ax = axes[1, col]
     heat = heatmaps[key]
     right = plot_right[key]
-    vmax_r = float(np.nanmax(np.abs(heat))) or 1.0
+    sum_R = float(np.sum(heat))
+    sum_R_thal = float(np.sum(heat[right]))
+    # Explizit: alle Relevanzen außerhalb der rechten Thalamus-Maske aufaddieren
+    sum_R_out = float(np.sum(heat[~right]))
+    if abs(sum_R) > 0:
+        pct_thal = 100.0 * sum_R_thal / sum_R
+        pct_out = 100.0 * sum_R_out / sum_R
+    else:
+        pct_thal = float("nan")
+        pct_out = float("nan")
+    abs_max = float(np.nanmax(np.abs(heat))) or 1.0
+    # Wie Abschnitt M: robuste Skala über Perzentil, nicht Peak (sonst wirkt
+    # „unverändert“ flau und „gejittert“ übersteuert).
+    vmax_r = float(np.nanpercentile(np.abs(heat), 99.5)) or abs_max
     r_slc = sagittal_slc(right.astype(np.float32), cx) > 0
     im = ax.imshow(
         sagittal_slc(heat, cx),
-        cmap="seismic",
+        cmap="RdBu_r",
         vmin=-vmax_r,
         vmax=vmax_r,
     )
@@ -639,11 +685,20 @@ for col, key in enumerate(keys):
         f"LRP unnormiert · {DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
         f"true={plot_true[key]:.0f}  pred={plot_pred[key]:.0f}  "
-        f"|R|_max={vmax_r:.3g}",
+        f"|R|_max={abs_max:.3g}\n"
+        f"%Thalamus = {pct_thal:.1f}%  "
+        f"(ΣR_thal={sum_R_thal:.1f} / ΣR={sum_R:.1f})\n"
+        f"%Outside = {pct_out:.1f}%  "
+        f"(ΣR_out={sum_R_out:.1f} / ΣR={sum_R:.1f})",
         fontsize=9,
     )
     ax.axis("off")
     im_lrps.append(im)
+    print(
+        f"[J/{key}] %Thalamus={pct_thal:.2f}%  %Outside={pct_out:.2f}%  "
+        f"ΣR_thal={sum_R_thal:.4g}  ΣR_out={sum_R_out:.4g}  "
+        f"ΣR={sum_R:.4g}  pred={plot_pred[key]:.1f}"
+    )
 
 for col, im in enumerate(im_vols):
     cbar = fig.colorbar(im, ax=axes[0, col], fraction=0.046, pad=0.04)
@@ -659,7 +714,7 @@ fig.legend(
     frameon=False,
     fontsize=9,
 )
-fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+fig.tight_layout(rect=[0, 0.05, 1, 0.88])
 
 if SHOW_PLOTS_INLINE:
     display(fig)
@@ -776,19 +831,27 @@ for key in DATASETS:
 
     assert heat_acc is not None and mask_acc is not None
     group_mask = binarize_summed_mask(mask_acc)
+    sum_H = float(np.sum(heat_acc))
+    sum_H_thal = float(np.sum(heat_acc[group_mask > 0]))
+    # ΣH ≈ N_GROUP; Anteil = Summe in Thalamus-Maske / Gesamtrelevanz
+    pct_thal = 100.0 * sum_H_thal / sum_H if sum_H > 0 else float("nan")
 
     group_heatmaps[key] = heat_acc.astype(np.float32)
     group_masks[key] = group_mask
     group_meta[key] = {
         "n": n_ok,
-        "sum_H": float(np.sum(heat_acc)),
+        "sum_H": sum_H,
+        "sum_H_thal": sum_H_thal,
+        "pct_thal": pct_thal,
         "max_H": float(np.max(heat_acc)),
         "mask_voxels": int(np.sum(group_mask > 0)),
         "first_sids": first_sids,
     }
     print(
-        f"[{key}] n={n_ok}  ΣH={group_meta[key]['sum_H']:.4g} "
-        f"(≈ N_GROUP={N_GROUP})  max(H)={group_meta[key]['max_H']:.4g}  "
+        f"[{key}] n={n_ok}  ΣH={sum_H:.4g} (≈ N_GROUP={N_GROUP})  "
+        f"ΣH_thal={sum_H_thal:.4g}  "
+        f"%Thalamus={pct_thal:.2f}%  "
+        f"max(H)={group_meta[key]['max_H']:.4g}  "
         f"Masken-Voxel={group_meta[key]['mask_voxels']}  "
         f"erste IDs={first_sids}"
     )
@@ -805,6 +868,14 @@ print(
 #
 # Ein Panel je Datenvariante, sagittal `x=70`. Overlay der binären Gruppen-Thalamus-
 # Maske in Grün (`alpha=0.5`). Eigene Colorbar je Panel (Werte ≥ 0 wegen Sum-Norm).
+#
+# **Anteil im rechten Thalamus** (bezogen auf die Gesamtrelevanz $\sum H \approx N_{\mathrm{GROUP}}$):
+#
+# $$
+# \%R_{\mathrm{Thal}}
+# = 100 \cdot
+# \frac{\sum_{i \in \mathrm{Thalamus}} H_i}{\sum_i H_i}
+# $$
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(14.5, 5.4))
@@ -817,6 +888,10 @@ fig.suptitle(
         r"\sum_i R^{(s)}_{\mathrm{norm},i}=1$"
         "\n"
         r"$H=\sum_{s=1}^{N_{\mathrm{GROUP}}} R^{(s)}_{\mathrm{norm}}$"
+        r"$\qquad"
+        r"\%R_{\mathrm{Thal}}="
+        r"100\cdot"
+        r"(\sum_{i\in\mathrm{Thal}} H_i)/(\sum_i H_i)$"
     ),
     fontsize=11,
 )
@@ -838,7 +913,9 @@ for ax, key in zip(axes, DATASETS):
     meta = group_meta[key]
     ax.set_title(
         f"{DATASETS[key]['label']}\n"
-        f"n={meta['n']}  ΣH={meta['sum_H']:.2f}  max={meta['max_H']:.3g}",
+        f"n={meta['n']}  ΣH={meta['sum_H']:.2f}  max={meta['max_H']:.3g}\n"
+        f"%Thalamus = {meta['pct_thal']:.1f}%  "
+        f"(ΣH_thal={meta['sum_H_thal']:.2f})",
         fontsize=10,
     )
     ax.axis("off")
@@ -861,7 +938,7 @@ fig.legend(
     frameon=False,
     fontsize=9,
 )
-fig.tight_layout(rect=[0, 0.08, 1, 0.86])
+fig.tight_layout(rect=[0, 0.08, 1, 0.82])
 
 if SHOW_PLOTS_INLINE:
     display(fig)
@@ -869,4 +946,796 @@ plt.close(fig)
 
 print(
     f"Gruppenfigur fertig (N_GROUP={N_GROUP}, Berechnung {elapsed_group_s:.1f} s)."
+)
+
+
+# %% [markdown]
+# ## M. CPU vs. GPU: LRP-Heatmaps für `IDX_PRED`
+#
+# Für dasselbe Subject wie in Abschnitt I werden die unnormierten LRP-Karten
+# **einmal auf CPU und einmal auf GPU** berechnet (`training=False`). Ziel: prüfen,
+# ob Device/dtype die Heatmaps verzerren.
+#
+# ### Was rauskommen sollte
+#
+# | Check | Erwartung |
+# |---|---|
+# | `input.dtype` / `R.dtype` | auf CPU und GPU gleich, typisch `float32` |
+# | GPU-Heatmap | Relevanz lokal am Gewebe / Thalamus; Hintergrund ≈ 0 (weiß bei RdBu) |
+# | CPU-Heatmap | oft **ähnlich** zur GPU; bei Instabilität (Division `R/z` an Padding/Nullen) **Rahmen-/Hintergrund-Artefakte**, große `\|R\|_max`, ggf. NaN/Inf |
+# | `max\|R_cpu − R_gpu\|` | bei stabilem Lauf klein relativ zu `\|R\|_max`; bei wildem CPU-Lauf groß |
+# | `ΣR` | grob in der Größenordnung der Modellvorhersage (Relevanzerhaltung), sofern keine Explosion |
+#
+# **Interpretation:** Gleiche dtypes + ähnliche Karten → Device egal. Wilde CPU-Rahmen
+# bei sauberer GPU → numerische Instabilität (nicht „falsches Modell“); für Plots
+# die GPU-Variante bevorzugen. Fehlt eine GPU, wird nur CPU gerechnet und gemeldet.
+
+# %%
+def _lrp_on_device(
+    model,
+    vol: np.ndarray,
+    device: str,
+) -> tuple[np.ndarray, str, str]:
+    """LRP auf `device` mit training=False; liefert (R, R.dtype, device_str)."""
+    x = np.expand_dims(vol, 0).astype(np.float32)
+    with tf.device(device):
+        lrp = LRP(
+            model,
+            layer=len(model.layers) - 1,
+            idx=0,
+            strategy=LRP_STRATEGY,
+        )
+        R_t = lrp(x, training=False)
+        R = np.asarray(R_t[0].numpy(), dtype=np.float32).squeeze()
+        dtype_str = str(R_t.dtype)
+        # physisches Device des Ergebnis-Tensors (falls verfügbar)
+        try:
+            dev_str = R_t.device
+        except Exception:
+            dev_str = device
+    return R, dtype_str, str(dev_str)
+
+
+gpus = tf.config.list_physical_devices("GPU")
+has_gpu = len(gpus) > 0
+print(f"TensorFlow {tf.__version__}")
+print(f"GPUs sichtbar: {gpus if has_gpu else '(keine)'}")
+print(f"Vergleich für Subject IDX_PRED={IDX_PRED}: {subject_id_plot}")
+print(f"Input-Volumes dtype (erwartet float32):")
+for key in DATASETS:
+    print(f"  [{key}] {plot_vols[key].dtype}")
+
+devices_to_run: list[tuple[str, str]] = [("CPU", "/CPU:0")]
+if has_gpu:
+    devices_to_run.append(("GPU", "/GPU:0"))
+else:
+    print(
+        "\nKeine GPU verfügbar — nur CPU-Lauf. "
+        "Erwartetes „sauberes“ Referenzbild entfällt."
+    )
+
+heatmaps_by_device: dict[str, dict[str, np.ndarray]] = {
+    label: {} for label, _ in devices_to_run
+}
+meta_by_device: dict[str, dict[str, dict[str, object]]] = {
+    label: {} for label, _ in devices_to_run
+}
+
+t0_dev = time.perf_counter()
+for key in DATASETS:
+    model = models[key]
+    load_vol = load_volume_fns[key]
+    vol = load_vol(str(plot_paths[key]))
+    for label, device in devices_to_run:
+        R, dtype_str, dev_str = _lrp_on_device(model, vol, device)
+        heatmaps_by_device[label][key] = R
+        n_nan = int(np.isnan(R).sum())
+        n_inf = int(np.isinf(R).sum())
+        abs_max = float(np.nanmax(np.abs(R))) if R.size else float("nan")
+        sum_r = float(np.nansum(R))
+        meta_by_device[label][key] = {
+            "dtype": dtype_str,
+            "device": dev_str,
+            "abs_max": abs_max,
+            "sum_R": sum_r,
+            "n_nan": n_nan,
+            "n_inf": n_inf,
+        }
+        print(
+            f"[{label}/{key}] dtype={dtype_str}  device={dev_str}  "
+            f"|R|_max={abs_max:.4g}  ΣR={sum_r:.4g}  "
+            f"NaN={n_nan}  Inf={n_inf}"
+        )
+elapsed_dev_s = time.perf_counter() - t0_dev
+print(f"\nDauer CPU/GPU-Vergleich: {elapsed_dev_s:.2f} s")
+
+# Numerischer Diff CPU vs. GPU (falls GPU da)
+if has_gpu:
+    print("\n--- Diff CPU − GPU ---")
+    rows_diff: list[dict[str, object]] = []
+    for key in DATASETS:
+        Rc = heatmaps_by_device["CPU"][key]
+        Rg = heatmaps_by_device["GPU"][key]
+        diff = Rc.astype(np.float64) - Rg.astype(np.float64)
+        max_abs = float(np.nanmax(np.abs(diff)))
+        rmse = float(np.sqrt(np.nanmean(diff**2)))
+        scale = max(
+            float(np.nanmax(np.abs(Rg))),
+            float(np.nanmax(np.abs(Rc))),
+            1e-12,
+        )
+        rel = max_abs / scale
+        same_dtype = (
+            meta_by_device["CPU"][key]["dtype"]
+            == meta_by_device["GPU"][key]["dtype"]
+        )
+        rows_diff.append(
+            {
+                "dataset": key,
+                "same_dtype": same_dtype,
+                "max|Δ|": max_abs,
+                "RMSE": rmse,
+                "max|Δ|/max|R|": rel,
+                "CPU_|R|_max": meta_by_device["CPU"][key]["abs_max"],
+                "GPU_|R|_max": meta_by_device["GPU"][key]["abs_max"],
+                "CPU_NaN": meta_by_device["CPU"][key]["n_nan"],
+                "GPU_NaN": meta_by_device["GPU"][key]["n_nan"],
+            }
+        )
+        status = "OK (ähnlich)" if rel < 0.05 and max_abs < 1.0 else (
+            "WARNUNG (große Abweichung — typisch bei CPU-Instabilität)"
+        )
+        print(
+            f"[{key}] same_dtype={same_dtype}  max|Δ|={max_abs:.4g}  "
+            f"rel={rel:.3g}  → {status}"
+        )
+    display(pd.DataFrame(rows_diff))
+else:
+    print("Diff-Tabelle übersprungen (keine GPU).")
+
+# Figur: Zeile 0 = CPU, Zeile 1 = GPU (falls vorhanden)
+n_rows = len(devices_to_run)
+fig, axes = plt.subplots(
+    n_rows, 3, figsize=(14.5, 4.2 * n_rows), squeeze=False
+)
+fig.suptitle(
+    (
+        f"CPU vs. GPU LRP  ·  Subject {subject_id_plot}"
+        f"  ·  sagittal $x={cx}$  ·  training=False\n"
+        "Erwartung: GPU lokal/sauber; CPU ggf. Rahmen-Artefakte bei Instabilität"
+    ),
+    fontsize=11,
+)
+
+for row, (label, _) in enumerate(devices_to_run):
+    for col, key in enumerate(DATASETS):
+        ax = axes[row, col]
+        R = heatmaps_by_device[label][key]
+        meta = meta_by_device[label][key]
+        vmax = float(np.nanpercentile(np.abs(R), 99.5)) or 1.0
+        im = ax.imshow(
+            sagittal_slc(R, cx),
+            cmap="RdBu_r",
+            vmin=-vmax,
+            vmax=vmax,
+        )
+        ax.set_title(
+            f"{label} · {DATASETS[key]['label']}\n"
+            f"dtype={meta['dtype']}  |R|_max={meta['abs_max']:.3g}\n"
+            f"ΣR={meta['sum_R']:.3g}  NaN={meta['n_nan']} Inf={meta['n_inf']}",
+            fontsize=9,
+        )
+        ax.axis("off")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label("LRP relevance")
+
+fig.tight_layout(rect=[0, 0.0, 1, 0.92])
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+print(
+    "\nFazit-Checkliste:\n"
+    "  1) dtypes CPU/GPU gleich (float32)?\n"
+    "  2) GPU-Karte ohne Rahmen/Hintergrund-Rauschen?\n"
+    "  3) Wenn CPU wild und GPU sauber → Device-Numerik, LRP auf GPU plotten.\n"
+    "  4) Wenn beide wild → Strategie/ε bzw. Division R/z prüfen, nicht nur Device."
+)
+
+
+# %% [markdown]
+# ## N. Folgeanalysen zur CPU/GPU-LRP-Diskrepanz
+#
+# Baut auf Abschnitt M auf (`heatmaps_by_device`, `meta_by_device`, `has_gpu`).
+# Ziel: eingrenzen, **wo** und **warum** CPU und GPU auseinanderlaufen.
+#
+# | Teil | Frage | Erwartung bei eurem Befund |
+# |---|---|---|
+# | **N.1** | `y_pred` vs. `ΣR`? | GPU: `ΣR ≈ y_pred`; CPU: `ΣR` Größenordnungen daneben |
+# | **N.2** | Ab welcher LRP-Schicht springt `ΣR`? | CPU: Sprung früh (Conv/Padding/Pool); GPU: flach |
+# | **N.3** | Anteil `\|R\|` in Zero-Padding / außerhalb Maske? | CPU hoch, GPU niedrig |
+# | **N.4** | Hilft größeres ε? | CPU näher an GPU → Nenner-Stabilität; sonst tiefer in αβ/`1e-9` |
+# | **N.5** | Nur Forward `model(x)` CPU vs. GPU? | fast gleich → Bug im LRP-Backward |
+# | **N.6** | Zwischen-Aktivierungen (Conv)? | winzige Δ → LRP verstärkt sie |
+# | **N.7** | Praxis | LRP-Plots auf GPU; CPU als instabil dokumentieren |
+
+# %%
+from tensorflow.keras import Model as KerasModel
+from tensorflow.keras.layers import Lambda
+from explainability.layers import PoolingLRPLayer, StandardLRPLayer
+from explainability.layers.layer import LRPLayer
+
+if "heatmaps_by_device" not in globals() or "devices_to_run" not in globals():
+    raise RuntimeError(
+        "Abschnitt N braucht Abschnitt M (heatmaps_by_device / devices_to_run)."
+    )
+
+ZERO_EPS = 1e-8  # Voxel mit |x| <= ZERO_EPS gelten als Null/Padding
+EPS_LARGE = 10.0  # N.4: ε am Dense gegenüber 0.25 erhöhen
+
+
+def _device_labels() -> list[str]:
+    return [label for label, _ in devices_to_run]
+
+
+def _predict_on_device(model, vol: np.ndarray, device: str) -> float:
+    x = np.expand_dims(vol, 0).astype(np.float32)
+    with tf.device(device):
+        y = model(x, training=False)
+        return float(np.squeeze(y.numpy()))
+
+
+def _find_backward_start(lrp_model) -> int:
+    for i, layer in enumerate(lrp_model.layers):
+        if isinstance(layer, Lambda) and "output_mask" in layer.name:
+            return i
+    for i, layer in enumerate(lrp_model.layers):
+        if isinstance(layer, LRPLayer):
+            return i
+    raise RuntimeError("Kein Rückwärtspfad im LRP-Modell gefunden")
+
+
+def _layer_rule_tag(layer) -> str:
+    if isinstance(layer, StandardLRPLayer):
+        parts = []
+        if layer.epsilon is not None:
+            parts.append(f"ε={layer.epsilon}")
+        if layer.gamma is not None:
+            parts.append(f"γ={layer.gamma}")
+        if layer.alpha is not None:
+            parts.append(f"α={layer.alpha},β={layer.beta}")
+        if getattr(layer, "b", False):
+            parts.append("b")
+        if getattr(layer, "flat", False):
+            parts.append("flat")
+        return ", ".join(parts) if parts else "LRP-0"
+    if isinstance(layer, PoolingLRPLayer):
+        return str(getattr(layer, "strategy", "?"))
+    return "—"
+
+
+def _collect_layer_relevance(
+    model,
+    vol: np.ndarray,
+    device: str,
+    *,
+    strategy: LRPStrategy,
+) -> pd.DataFrame:
+    """ΣR je Mask-/Standard-/Pooling-LRP-Schicht (eine Output-Schicht nach der anderen)."""
+    x = np.expand_dims(vol, 0).astype(np.float32)
+    with tf.device(device):
+        lrp_model = LRP(
+            model,
+            layer=len(model.layers) - 1,
+            idx=0,
+            strategy=strategy,
+        )
+        start = _find_backward_start(lrp_model)
+        layers = [
+            lyr
+            for lyr in lrp_model.layers[start:]
+            if isinstance(lyr, (StandardLRPLayer, PoolingLRPLayer))
+            or (isinstance(lyr, Lambda) and "output_mask" in lyr.name)
+        ]
+        rows = []
+        for layer in layers:
+            probe = KerasModel(lrp_model.input, layer.output)
+            R = np.asarray(probe(x, training=False).numpy())
+            sum_r = float(np.sum(R))
+            rows.append(
+                {
+                    "name": layer.name,
+                    "type": type(layer).__name__,
+                    "rule": _layer_rule_tag(layer),
+                    "sum_R": sum_r,
+                    "abs_max": float(np.nanmax(np.abs(R))) if R.size else float("nan"),
+                    "n_nan": int(np.isnan(R).sum()),
+                    "n_inf": int(np.isinf(R).sum()),
+                }
+            )
+            del probe, R
+    df = pd.DataFrame(rows)
+    if len(df):
+        r0 = float(df["sum_R"].iloc[0])
+        df["delta_sum_R"] = df["sum_R"].diff()
+        df["ratio_to_start"] = df["sum_R"] / r0 if r0 else np.nan
+    return df
+
+
+def _frac_abs_r_in_mask(R: np.ndarray, mask: np.ndarray) -> float:
+    abs_r = np.abs(R.astype(np.float64))
+    total = float(abs_r.sum())
+    if total <= 0:
+        return float("nan")
+    m = mask.astype(bool)
+    if m.shape != R.shape:
+        raise ValueError(f"Maske {m.shape} != R {R.shape}")
+    return float(abs_r[m].sum() / total)
+
+
+# ---------------------------------------------------------------------------
+# N.1  y_pred vs. ΣR
+# ---------------------------------------------------------------------------
+print("=" * 72)
+print("N.1  Vorhersage y_pred vs. Relevanzsumme ΣR (training=False)")
+print("=" * 72)
+
+rows_n1: list[dict[str, object]] = []
+for key in DATASETS:
+    model = models[key]
+    load_vol = load_volume_fns[key]
+    vol = load_vol(str(plot_paths[key]))
+    for label, device in devices_to_run:
+        y_pred = _predict_on_device(model, vol, device)
+        sum_r = float(meta_by_device[label][key]["sum_R"])
+        abs_max = float(meta_by_device[label][key]["abs_max"])
+        ratio = sum_r / y_pred if y_pred != 0 else float("nan")
+        rows_n1.append(
+            {
+                "dataset": key,
+                "device": label,
+                "y_pred": y_pred,
+                "sum_R": sum_r,
+                "sum_R/y_pred": ratio,
+                "|R|_max": abs_max,
+            }
+        )
+        print(
+            f"[{label}/{key}] y_pred={y_pred:.4g}  ΣR={sum_r:.4g}  "
+            f"ΣR/y_pred={ratio:.4g}"
+        )
+
+df_n1 = pd.DataFrame(rows_n1)
+display(df_n1)
+
+fig, axes = plt.subplots(1, len(DATASETS), figsize=(4.2 * len(DATASETS), 4.0))
+if len(DATASETS) == 1:
+    axes = [axes]
+for ax, key in zip(axes, DATASETS):
+    sub = df_n1[df_n1["dataset"] == key]
+    x_pos = np.arange(len(sub))
+    ax.bar(x_pos - 0.15, sub["y_pred"], width=0.3, label="y_pred")
+    ax.bar(x_pos + 0.15, sub["sum_R"], width=0.3, label="ΣR")
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(sub["device"].tolist())
+    ax.set_yscale("symlog", linthresh=1.0)
+    ax.set_title(DATASETS[key]["label"], fontsize=10)
+    ax.set_ylabel("Wert (symlog)")
+    ax.legend(fontsize=8)
+fig.suptitle(
+    f"N.1  y_pred vs. ΣR  ·  Subject {subject_id_plot}\n"
+    "Erwartung: GPU ΣR ≈ y_pred; CPU oft um Größenordnungen daneben",
+    fontsize=11,
+)
+fig.tight_layout(rect=[0, 0, 1, 0.88])
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# N.2  Layer-weise ΣR
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("N.2  Layer-weise Relevanzsumme ΣR (Mask + StandardLRP + Pooling)")
+print("=" * 72)
+
+layerwise: dict[str, dict[str, pd.DataFrame]] = {
+    label: {} for label in _device_labels()
+}
+t0_lw = time.perf_counter()
+for key in DATASETS:
+    model = models[key]
+    vol = load_volume_fns[key](str(plot_paths[key]))
+    for label, device in devices_to_run:
+        print(f"  layerwise [{label}/{key}] …")
+        df_lw = _collect_layer_relevance(
+            model, vol, device, strategy=LRP_STRATEGY
+        )
+        layerwise[label][key] = df_lw
+        jump_idx = None
+        if len(df_lw) > 1:
+            dlt = df_lw["delta_sum_R"].iloc[1:].abs()
+            if len(dlt) and dlt.notna().any():
+                jump_idx = int(dlt.idxmax())
+        jump = df_lw.loc[jump_idx] if jump_idx is not None else None
+        print(
+            f"    Start ΣR={df_lw['sum_R'].iloc[0]:.4g}  "
+            f"Ende ΣR={df_lw['sum_R'].iloc[-1]:.4g}  "
+            f"max|Δ| @ {jump['name'] if jump is not None else '—'} "
+            f"({float(jump['delta_sum_R']) if jump is not None else float('nan'):.4g})"
+        )
+print(f"Dauer N.2: {time.perf_counter() - t0_lw:.1f} s")
+
+n_dev = len(devices_to_run)
+fig, axes = plt.subplots(
+    n_dev, len(DATASETS), figsize=(4.5 * len(DATASETS), 3.8 * n_dev), squeeze=False
+)
+for row, (label, _) in enumerate(devices_to_run):
+    for col, key in enumerate(DATASETS):
+        ax = axes[row, col]
+        df_lw = layerwise[label][key]
+        ax.plot(df_lw["sum_R"].values, marker="o", ms=3)
+        ax.set_yscale("symlog", linthresh=1.0)
+        ax.set_title(f"{label} · {DATASETS[key]['label']}", fontsize=9)
+        ax.set_xlabel("LRP-Schritt (Mask → Input)")
+        ax.set_ylabel("ΣR")
+        if len(df_lw):
+            ax.axhline(df_lw["sum_R"].iloc[0], color="C1", ls="--", lw=0.8)
+fig.suptitle(
+    "N.2  ΣR entlang des LRP-Rückwegs\n"
+    "Erwartung: GPU flach; CPU mit Sprung (oft früh bei Conv/Padding)",
+    fontsize=11,
+)
+fig.tight_layout(rect=[0, 0, 1, 0.90])
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+# Tabelle: größter |ΔΣR| je Device/Dataset
+rows_jump = []
+for label in _device_labels():
+    for key in DATASETS:
+        df_lw = layerwise[label][key]
+        if len(df_lw) < 2:
+            continue
+        i = None
+        if len(df_lw) > 1:
+            dlt = df_lw["delta_sum_R"].iloc[1:].abs()
+            if len(dlt) and dlt.notna().any():
+                i = int(dlt.idxmax())
+        if i is None:
+            continue
+        row = df_lw.loc[i]
+        rows_jump.append(
+            {
+                "device": label,
+                "dataset": key,
+                "layer": row["name"],
+                "rule": row["rule"],
+                "delta_sum_R": float(row["delta_sum_R"]),
+                "sum_R_after": float(row["sum_R"]),
+            }
+        )
+display(pd.DataFrame(rows_jump))
+
+
+# ---------------------------------------------------------------------------
+# N.3  Anteil |R| in Zero-Padding / außerhalb Thalamus
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("N.3  Anteil |R| in Null-Voxel bzw. außerhalb rechter Thalamus-Maske")
+print("=" * 72)
+
+rows_n3: list[dict[str, object]] = []
+for key in DATASETS:
+    vol = plot_vols[key]
+    zero_mask = np.abs(vol) <= ZERO_EPS
+    if vol.ndim == 4:
+        zero_mask = zero_mask[..., 0]
+    thal = np.asarray(nib.load(str(plot_masks[key])).get_fdata()) > 0
+    thal = thal.squeeze()
+    for label in _device_labels():
+        R = heatmaps_by_device[label][key]
+        if R.ndim == 4:
+            R = R[..., 0]
+        frac_zero = _frac_abs_r_in_mask(R, zero_mask)
+        frac_out_thal = _frac_abs_r_in_mask(R, ~thal)
+        frac_thal = _frac_abs_r_in_mask(R, thal)
+        rows_n3.append(
+            {
+                "dataset": key,
+                "device": label,
+                "pct_|R|_in_zeros": 100.0 * frac_zero,
+                "pct_|R|_outside_thal": 100.0 * frac_out_thal,
+                "pct_|R|_in_thal": 100.0 * frac_thal,
+                "pct_voxels_zero": 100.0 * float(zero_mask.mean()),
+            }
+        )
+        print(
+            f"[{label}/{key}] %|R| in zeros={100 * frac_zero:.1f}%  "
+            f"%|R| außerhalb Thal={100 * frac_out_thal:.1f}%  "
+            f"%|R| in Thal={100 * frac_thal:.1f}%"
+        )
+
+df_n3 = pd.DataFrame(rows_n3)
+display(df_n3)
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+metrics = [
+    ("pct_|R|_in_zeros", "%|R| in Null-Voxel"),
+    ("pct_|R|_outside_thal", "%|R| außerhalb Thalamus"),
+]
+for ax, (col, title) in zip(axes, metrics):
+    for label in _device_labels():
+        sub = df_n3[df_n3["device"] == label]
+        ax.plot(
+            range(len(sub)),
+            sub[col].values,
+            marker="o",
+            label=label,
+        )
+    ax.set_xticks(range(len(DATASETS)))
+    ax.set_xticklabels([DATASETS[k]["label"] for k in DATASETS], rotation=15, ha="right")
+    ax.set_ylabel("%")
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 105)
+fig.suptitle(
+    f"N.3  Relevanz-Leckage  ·  Subject {subject_id_plot}\n"
+    "Erwartung: CPU hoch in Zeros/Rahmen; GPU niedrig (bes. all-zero)",
+    fontsize=11,
+)
+fig.tight_layout(rect=[0, 0, 1, 0.88])
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# N.4  Größeres ε (Dense-Regel)
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print(f"N.4  Stabilisierung: Dense-ε → {EPS_LARGE} (Basis-Strategie hatte ε=0.25)")
+print("=" * 72)
+
+LRP_STRATEGY_EPS_LARGE = LRPStrategy(
+    layers=[
+        {"flat": True},
+        {"flat": True},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"alpha": 2, "beta": 1},
+        {"epsilon": EPS_LARGE},
+    ],
+    pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
+)
+
+rows_n4: list[dict[str, object]] = []
+heatmaps_eps: dict[str, dict[str, np.ndarray]] = {
+    label: {} for label in _device_labels()
+}
+t0_eps = time.perf_counter()
+for key in DATASETS:
+    model = models[key]
+    vol = load_volume_fns[key](str(plot_paths[key]))
+    zero_mask = np.abs(vol.squeeze()) <= ZERO_EPS
+    for label, device in devices_to_run:
+        x = np.expand_dims(vol, 0).astype(np.float32)
+        with tf.device(device):
+            lrp_e = LRP(
+                model,
+                layer=len(model.layers) - 1,
+                idx=0,
+                strategy=LRP_STRATEGY_EPS_LARGE,
+            )
+            R_e = np.asarray(
+                lrp_e(x, training=False)[0].numpy(), dtype=np.float32
+            ).squeeze()
+        heatmaps_eps[label][key] = R_e
+        base = heatmaps_by_device[label][key]
+        rows_n4.append(
+            {
+                "dataset": key,
+                "device": label,
+                "sum_R_base": float(np.nansum(base)),
+                "sum_R_eps_large": float(np.nansum(R_e)),
+                "|R|_max_base": float(np.nanmax(np.abs(base))),
+                "|R|_max_eps_large": float(np.nanmax(np.abs(R_e))),
+                "pct_|R|_zeros_base": 100.0
+                * _frac_abs_r_in_mask(base.squeeze(), zero_mask),
+                "pct_|R|_zeros_eps_large": 100.0
+                * _frac_abs_r_in_mask(R_e.squeeze(), zero_mask),
+            }
+        )
+        print(
+            f"[{label}/{key}] ΣR {float(np.nansum(base)):.4g} → "
+            f"{float(np.nansum(R_e)):.4g}  |R|_max "
+            f"{float(np.nanmax(np.abs(base))):.4g} → "
+            f"{float(np.nanmax(np.abs(R_e))):.4g}"
+        )
+print(f"Dauer N.4: {time.perf_counter() - t0_eps:.1f} s")
+df_n4 = pd.DataFrame(rows_n4)
+display(df_n4)
+
+# 2×3: CPU base vs CPU ε-large (Instabilität sichtbar?)
+if "CPU" in heatmaps_eps:
+    fig, axes = plt.subplots(2, 3, figsize=(14.5, 8.0))
+    fig.suptitle(
+        f"N.4  CPU: Basis-ε vs. ε={EPS_LARGE}  ·  Subject {subject_id_plot}\n"
+        "Wenn CPU mit großem ε der GPU ähnlicher wird → Nenner-Problem",
+        fontsize=11,
+    )
+    for col, key in enumerate(DATASETS):
+        for row, (tag, R) in enumerate(
+            [
+                ("CPU Basis", heatmaps_by_device["CPU"][key]),
+                (f"CPU ε={EPS_LARGE}", heatmaps_eps["CPU"][key]),
+            ]
+        ):
+            ax = axes[row, col]
+            vmax = float(np.nanpercentile(np.abs(R), 99.5)) or 1.0
+            ax.imshow(
+                sagittal_slc(R.squeeze(), cx),
+                cmap="RdBu_r",
+                vmin=-vmax,
+                vmax=vmax,
+            )
+            ax.set_title(
+                f"{tag} · {DATASETS[key]['label']}\n"
+                f"ΣR={float(np.nansum(R)):.3g}  |R|_max={float(np.nanmax(np.abs(R))):.3g}",
+                fontsize=9,
+            )
+            ax.axis("off")
+    fig.tight_layout(rect=[0, 0, 1, 0.90])
+    if SHOW_PLOTS_INLINE:
+        display(fig)
+    plt.close(fig)
+
+print(
+    "Hinweis N.4: αβ-Conv nutzt festes 1e-9 in explainability/layers/conv.py — "
+    "größeres Dense-ε allein heilt Padding-Lecks oft nur teilweise."
+)
+
+
+# ---------------------------------------------------------------------------
+# N.5  Nur Forward model(x)
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("N.5  Bitgenau Forward: model(x) CPU vs. GPU (ohne LRP)")
+print("=" * 72)
+
+rows_n5: list[dict[str, object]] = []
+if has_gpu:
+    for key in DATASETS:
+        model = models[key]
+        vol = load_volume_fns[key](str(plot_paths[key]))
+        x = np.expand_dims(vol, 0).astype(np.float32)
+        with tf.device("/CPU:0"):
+            y_cpu = model(x, training=False).numpy()
+        with tf.device("/GPU:0"):
+            y_gpu = model(x, training=False).numpy()
+        diff = np.abs(y_cpu.astype(np.float64) - y_gpu.astype(np.float64))
+        rows_n5.append(
+            {
+                "dataset": key,
+                "y_cpu": float(np.squeeze(y_cpu)),
+                "y_gpu": float(np.squeeze(y_gpu)),
+                "max|Δ|": float(diff.max()),
+                "rel|Δ|": float(diff.max() / max(abs(float(np.squeeze(y_gpu))), 1e-12)),
+            }
+        )
+        print(
+            f"[{key}] y_cpu={float(np.squeeze(y_cpu)):.8g}  "
+            f"y_gpu={float(np.squeeze(y_gpu)):.8g}  "
+            f"max|Δ|={float(diff.max()):.4g}"
+        )
+    display(pd.DataFrame(rows_n5))
+    print(
+        "Erwartung: max|Δ| winzig → Forward OK, Diskrepanz sitzt im LRP-Backward."
+    )
+else:
+    print("N.5 übersprungen (keine GPU).")
+
+
+# ---------------------------------------------------------------------------
+# N.6  Zwischen-Aktivierungen (erste/letzte Conv3D)
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("N.6  Conv3D-Zwischenaktivierungen CPU vs. GPU")
+print("=" * 72)
+
+rows_n6: list[dict[str, object]] = []
+if has_gpu:
+    for key in DATASETS:
+        model = models[key]
+        vol = load_volume_fns[key](str(plot_paths[key]))
+        x = np.expand_dims(vol, 0).astype(np.float32)
+        convs = [lyr for lyr in model.layers if type(lyr).__name__ == "Conv3D"]
+        if not convs:
+            print(f"[{key}] keine Conv3D — übersprungen")
+            continue
+        targets = [convs[0], convs[-1]]
+        probe = KerasModel(model.input, [t.output for t in targets])
+        with tf.device("/CPU:0"):
+            outs_cpu = probe(x, training=False)
+        with tf.device("/GPU:0"):
+            outs_gpu = probe(x, training=False)
+        if not isinstance(outs_cpu, (list, tuple)):
+            outs_cpu, outs_gpu = [outs_cpu], [outs_gpu]
+        for lyr, a_cpu, a_gpu in zip(targets, outs_cpu, outs_gpu):
+            ac = a_cpu.numpy().astype(np.float64)
+            ag = a_gpu.numpy().astype(np.float64)
+            d = np.abs(ac - ag)
+            rows_n6.append(
+                {
+                    "dataset": key,
+                    "layer": lyr.name,
+                    "shape": tuple(int(s) for s in ac.shape),
+                    "max|a|": float(np.max(np.abs(ag))),
+                    "max|Δ|": float(d.max()),
+                    "RMSE": float(np.sqrt(np.mean(d**2))),
+                    "max|Δ|/max|a|": float(d.max() / max(np.max(np.abs(ag)), 1e-12)),
+                }
+            )
+            print(
+                f"[{key}/{lyr.name}] max|Δ|={float(d.max()):.4g}  "
+                f"rel={float(d.max() / max(np.max(np.abs(ag)), 1e-12)):.3g}"
+            )
+        del probe
+    display(pd.DataFrame(rows_n6))
+    print(
+        "Erwartung: relative Δ ≪ 1, aber nicht null — LRP (R/z) kann sie verstärken."
+    )
+else:
+    print("N.6 übersprungen (keine GPU).")
+
+
+# ---------------------------------------------------------------------------
+# N.7  Praxis-Empfehlung
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("N.7  Praxis-Empfehlung (Zusammenfassung)")
+print("=" * 72)
+
+# Heuristik aus N.1 / N.3
+summary_lines = [
+    "Für Paper/Plots: LRP auf GPU mit training=False rechnen.",
+    "CPU-Heatmaps bei Rahmen-Artefakten und ΣR ≫ y_pred nicht interpretieren.",
+]
+if has_gpu and len(df_n1):
+    cpu_ratios = df_n1[df_n1["device"] == "CPU"]["sum_R/y_pred"].to_numpy(dtype=float)
+    gpu_ratios = df_n1[df_n1["device"] == "GPU"]["sum_R/y_pred"].to_numpy(dtype=float)
+    if np.nanmedian(np.abs(cpu_ratios)) > 10 * max(np.nanmedian(np.abs(gpu_ratios)), 1e-6):
+        summary_lines.append(
+            "Befund N.1: CPU-Relevanzerhaltung klar gebrochen → Device-Numerik bestätigt."
+        )
+if len(df_n3):
+    cpu_z = df_n3[df_n3["device"] == "CPU"]["pct_|R|_in_zeros"].median()
+    if "GPU" in df_n3["device"].values:
+        gpu_z = df_n3[df_n3["device"] == "GPU"]["pct_|R|_in_zeros"].median()
+        summary_lines.append(
+            f"Befund N.3: Median %|R| in Zeros  CPU={cpu_z:.1f}%  GPU={gpu_z:.1f}%."
+        )
+if has_gpu and rows_n5:
+    max_fwd = max(r["max|Δ|"] for r in rows_n5)
+    summary_lines.append(
+        f"Befund N.5: max Forward-|Δ|={max_fwd:.4g} "
+        + (
+            "→ Forward ok, Fokus auf LRP-Backward."
+            if max_fwd < 1e-3
+            else "→ auch Forward weicht ab, Conv/cuDNN prüfen."
+        )
+    )
+summary_lines.append(
+    "Nächste Code-Fixes (optional): |z|<τ abschneiden in StandardLRPLayer; "
+    "αβ-Eps in conv.py erhöhen; LRP-Tests CPU+GPU."
+)
+for line in summary_lines:
+    print(f"  • {line}")
+
+print(
+    "\nAbschnitt N fertig. Objekte: df_n1 … df_n4, layerwise, heatmaps_eps, "
+    "rows_n5, rows_n6."
 )
