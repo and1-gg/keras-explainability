@@ -619,13 +619,6 @@ def load_nifti(path: Path) -> np.ndarray:
     return np.asarray(nib.load(str(path)).get_fdata(), dtype=np.float32).squeeze()
 
 
-def rgba_mask(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
-    out = np.zeros((*mask_slc.shape, 4), dtype=np.float32)
-    out[mask_slc] = rgba
-    return out
-
-
-
 def rgba_mask_outline(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
     """Nur die Maskengrenze einfärben; Inneres bleibt transparent (~2 px)."""
     m = np.asarray(mask_slc, dtype=bool)
@@ -757,7 +750,8 @@ print(
 # - Obere Reihe: Input-Intensität, sagittal `x=70`, rechte Thalamus-**Umrandung**
 #   in Grün (Innen transparent), eigene Colorbar je Panel.
 # - Untere Reihe: LRP-Relevanzen (bei aktivem z-Score voxelweise `R · σ`),
-#   Colorbar je Panel mit `vmin/vmax = ±P99.5(|R|)`.
+#   ebenfalls nur grüne Thalamus-Umrandung, Colorbar je Panel mit
+#   `vmin/vmax = ±P99.5(|R|)`.
 # - Titel-Summen bei z-Score: `ΣR + μ` bzw. Thalamus/Outside **anteilig mit μ**,
 #   damit `ΣR ≈` Pred auf Originalskala. Prozente unverändert.
 # - In jedem Panel: Subject-ID, wahres Volumen und zurückgerechnete Vorhersage.
@@ -803,8 +797,7 @@ for col, key in enumerate(keys):
     vmax_i = float(np.percentile(pos, 99.5)) if pos.size else 1.0
     r_slc = sagittal_slc(right.astype(np.float32), cx) > 0
     im = ax.imshow(sagittal_slc(vol, cx), cmap="gray", vmin=0.0, vmax=vmax_i)
-    # Obere Reihe: nur grüne Thalamus-Umrandung (Innen transparent).
-    # Untere LRP-Reihe behält die gefüllte Maske unverändert.
+    # Grüne Thalamus-Umrandung (Innen transparent).
     ax.imshow(rgba_mask_outline(r_slc, COLOR_RIGHT), interpolation="nearest")
     ax.set_title(
         f"{DATASETS[key]['label']}\n"
@@ -845,7 +838,7 @@ for col, key in enumerate(keys):
         vmin=-vmax_r,
         vmax=vmax_r,
     )
-    ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    ax.imshow(rgba_mask_outline(r_slc, COLOR_RIGHT), interpolation="nearest")
     ax.set_title(
         f"LRP · {DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
@@ -873,7 +866,14 @@ for col, im in enumerate(im_lrps):
     cbar.set_label("LRP relevance")
 
 fig.legend(
-    handles=[Patch(facecolor=COLOR_RIGHT, edgecolor="none", label="rechter Thalamus (oben: Umrandung, unten: Füllung)")],
+    handles=[
+        Patch(
+            facecolor="none",
+            edgecolor=COLOR_RIGHT[:3],
+            linewidth=1.5,
+            label="rechter Thalamus",
+        )
+    ],
     loc="lower center",
     ncol=1,
     frameon=False,
@@ -1032,7 +1032,7 @@ print(
 # ## L. Figur: vier Gruppen-LRP-Karten
 #
 # Ein Panel je Datenvariante, sagittal `x=70`. Overlay der binären Gruppen-Thalamus-
-# Maske in Grün (`alpha=0.5`). Eigene Colorbar je Panel (Werte ≥ 0 wegen Sum-Norm).
+# Maske nur als grüne Umrandung (Innen transparent). Eigene Colorbar je Panel (Werte ≥ 0 wegen Sum-Norm).
 #
 # **Anteil im rechten Thalamus** (bezogen auf die Gesamtrelevanz $\sum H \approx N_{\mathrm{GROUP}}$):
 #
@@ -1074,7 +1074,7 @@ for ax, key in zip(axes, DATASETS):
         vmin=0.0,
         vmax=vmax_h,
     )
-    ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    ax.imshow(rgba_mask_outline(r_slc, COLOR_RIGHT), interpolation="nearest")
     meta = group_meta[key]
     ax.set_title(
         f"{DATASETS[key]['label']}\n"
@@ -1093,9 +1093,10 @@ for ax, im in zip(axes, im_groups):
 fig.legend(
     handles=[
         Patch(
-            facecolor=COLOR_RIGHT,
-            edgecolor="none",
-            label="Gruppen-Thalamus-Maske (binär)",
+            facecolor="none",
+            edgecolor=COLOR_RIGHT[:3],
+            linewidth=1.5,
+            label="Gruppen-Thalamus-Maske (Umrandung)",
         )
     ],
     loc="lower center",

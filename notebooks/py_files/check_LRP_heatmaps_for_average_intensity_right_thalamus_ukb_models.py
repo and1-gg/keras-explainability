@@ -16,16 +16,17 @@
 # %% [markdown]
 # # LRP-Heatmaps: `average-intensity_right-whole-thalamus` (UKB)
 #
-# Vergleich von drei auf UKB trainierten SFCN-Modellen für die Label-Variable
+# Vergleich von vier auf UKB trainierten SFCN-Modellen für die Label-Variable
 # `average-intensity_right-whole-thalamus` (mittlere Intensität des rechten Thalamus):
 #
 # 1. **unveränderte** MRI-Scans (`cropped.nii.gz`)
 # 2. **gejitterte** Scans (rechter Thalamus erhalten, Rest permutiert)
 # 3. **all-zero** außer rechtem Thalamus
+# 4. **rechter Thalamus = 0**, Rest unverändert (Umkehrung von (3))
 #
 # Ablauf: Vorhersagen für `N_SUBJ_PRED` Holdout-Subjects → Scatter mit MAE und
 # Pearson-r → Tabelle wahr vs. prädiziert → für Subject `IDX_PRED` sagittale
-# Inputs (`x=70`) mit rechter Thalamus-Maske → drei unnormierte LRP-Heatmaps,
+# Inputs (`x=70`) mit rechter Thalamus-Maske → vier unnormierte LRP-Heatmaps,
 # die bei jedem Lauf neu berechnet werden.
 #
 
@@ -57,11 +58,11 @@ from scipy.stats import pearsonr
 # %% [markdown]
 # ## B. Konfiguration
 #
-# - `N_SUBJ_PRED`: Anzahl Holdout-Subjects, für die jedes der drei Modelle
+# - `N_SUBJ_PRED`: Anzahl Holdout-Subjects, für die jedes der vier Modelle
 #   vorhersagt. Die Subjects sind die ersten Zeilen der Holdout-TSV von
-#   Dataset **(1)**; dieselben IDs werden in den TSVs von **(2)** und **(3)**
+#   Dataset **(1)**; dieselben IDs werden in den TSVs von **(2)**, **(3)** und **(4)**
 #   nachgeschlagen.
-# - `IDX_PRED`: Index des Subjects für die 2×3-Figur. Muss
+# - `IDX_PRED`: Index des Subjects für die 2×4-Figur. Muss
 #   `0 <= IDX_PRED < N_SUBJ_PRED` erfüllen, sonst Fehler.
 #
 
@@ -100,7 +101,8 @@ MASK_TMPL_NORMAL = (
 RUN_DIR_JITTER = Path(
     "/mnt/ceph2/dl_project/data/nn-trainings/mri/"
     "average-intensity_right-whole-thalamus/"
-    "training_run_17h45m44s_23sep2026"
+    "training_run_20h34m22s_26sep2026"
+    #"training_run_17h45m44s_23sep2026"
 ).resolve()
 PREDICT_TSV_JITTER = Path(
     "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
@@ -124,6 +126,21 @@ PREDICT_TSV_ALL_ZERO = Path(
 MASK_TMPL_ALL_ZERO = (
     "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/recon/"
     "{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz"
+)
+
+# (4) right thalamus is zero, all other normal
+RUN_DIR_THALAMUS_IS_ZERO = Path(
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/"
+    "average-intensity_right-whole-thalamus/"
+    "training_run_13h33m52s_28sep2026"
+).resolve()
+PREDICT_TSV_THALAMUS_IS_ZERO = Path(
+    "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
+    "right_whole_thalamus/average_intensity/right_thalamus_is_zero_other_is_normal/predict.tsv"
+).resolve()
+MASK_TMPL_THALAMUS_IS_ZERO = (
+    "/mnt/ceph2/dl_project/data/mri-scans/brain_region_is_zero_other_normal/"
+    "right-thalamus/ukb/recon/{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz"
 )
 
 DATASETS = {
@@ -156,6 +173,16 @@ DATASETS = {
             "{sid}/mri/aseg_mni152_right_thalamus.nii.gz",
             "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/right-thalamus/"
             "ukb/recon/{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz",
+        ],
+    },
+    "thalamus_is_zero": {
+        "label": "(4) rechter Thalamus = 0, Rest normal",
+        "run_dir": RUN_DIR_THALAMUS_IS_ZERO,
+        "predict_tsv": PREDICT_TSV_THALAMUS_IS_ZERO,
+        "mask_tmpl": MASK_TMPL_THALAMUS_IS_ZERO,
+        "mask_fallbacks": [
+            "/mnt/ceph2/dl_project/data/mri-scans/brain_region_is_zero_other_normal/"
+            "right-thalamus/ukb/recon/{sid}/mri/aseg_mni152_right_thalamus.nii.gz",
         ],
     },
 }
@@ -506,7 +533,7 @@ metrics_df = pd.DataFrame(metrics_rows)
 
 
 # %% [markdown]
-# ## G. Scatter-Plot (3 Panels)
+# ## G. Scatter-Plot (4 Panels)
 #
 # Ein Panel je Datenvariante. Jeder Punkt ist ein Holdout-Subject
 # (`N_SUBJ_PRED`). Im Titel stehen MAE und Pearson-Korrelation.
@@ -514,7 +541,7 @@ metrics_df = pd.DataFrame(metrics_rows)
 #
 
 # %%
-fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2))
+fig, axes = plt.subplots(1, len(DATASETS), figsize=(4.5 * len(DATASETS), 4.2))
 fig.suptitle(
     f"Wahr vs. prädiziert  ·  {PRED_VAR}  ·  n={N_SUBJ_PRED}",
     fontsize=12,
@@ -555,7 +582,7 @@ plt.close(fig)
 # %% [markdown]
 # ## H. Tabelle: wahre vs. prädizierte Intensität
 #
-# Für alle drei Datensätze und die `N_SUBJ_PRED` Subjects: wahrer Wert aus der
+# Für alle vier Datensätze und die `N_SUBJ_PRED` Subjects: wahrer Wert aus der
 # Holdout-TSV und Vorhersage des jeweiligen Modells
 # (`average-intensity_right-whole-thalamus`).
 #
@@ -582,7 +609,7 @@ display(metrics_df.round(4))
 # ## I. Input-Bilder und Thalamus-Maske für `IDX_PRED`
 #
 # Sagittaler Schnitt `x=70` des Input-Volumes aus der jeweiligen `predict.tsv`.
-# Die rechte Thalamus-Maske wird grün mit `alpha=0.5` darübergelegt.
+# Die rechte Thalamus-Maske wird in der Input-Reihe als grüne Umrandung gezeichnet.
 #
 # Masken:
 #
@@ -591,6 +618,7 @@ display(metrics_df.round(4))
 # 2. `…/jittered_data/ukb/recon/<sid>/mri/aseg_mni152_right_thalamus_cropped.nii.gz`
 # 3. `…/only_brain_regions/ukb/recon/<sid>/mri/aseg_mni152_right_thalamus_cropped.nii.gz`
 #    (Fallback ohne `_cropped`, bzw. cropped unter `right-thalamus/`)
+# 4. `…/brain_region_is_zero_other_normal/right-thalamus/ukb/recon/<sid>/mri/aseg_mni152_right_thalamus_cropped.nii.gz`
 #
 
 # %%
@@ -609,12 +637,6 @@ def resolve_mask_path(dataset_key: str, sid: str) -> Path:
 
 def load_nifti(path: Path) -> np.ndarray:
     return np.asarray(nib.load(str(path)).get_fdata(), dtype=np.float32).squeeze()
-
-
-def rgba_mask(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
-    out = np.zeros((*mask_slc.shape, 4), dtype=np.float32)
-    out[mask_slc] = rgba
-    return out
 
 
 def sagittal_slc(vol: np.ndarray, cx: int) -> np.ndarray:
@@ -662,7 +684,7 @@ print(f"sagittal x = {cx}")
 # %% [markdown]
 # ## J. LRP-Heatmaps neu berechnen (unnormiert)
 #
-# Für Subject `IDX_PRED` werden die drei Heatmaps bei jedem Lauf neu berechnet.
+# Für Subject `IDX_PRED` werden die vier Heatmaps bei jedem Lauf neu berechnet.
 # Gespeicherte Dateien (`lrp_heatmap_raw.nii.gz` o. Ä.) werden nicht geladen.
 #
 # War `normalisation.use: true`, wird jede Heatmap mit dem Trainings-σ
@@ -671,7 +693,7 @@ print(f"sagittal x = {cx}")
 # der Vorhersage, keine räumliche Relevanz. Danach gilt
 # `ΣR · σ + μ ≈` zurückgerechnete Vorhersage. Der Thalamus-Anteil
 # `ΣR_Thalamus / ΣR` ändert sich durch die Multiplikation mit σ nicht.
-# Anschließend wird die Dauer aller drei Berechnungen ausgegeben.
+# Anschließend wird die Dauer aller vier Berechnungen ausgegeben.
 #
 
 # %%
@@ -704,18 +726,18 @@ for key in DATASETS:
     )
 elapsed_s = time.perf_counter() - t0
 print(
-    f"\nDauer Berechnung aller 3 Heatmaps: {elapsed_s:.2f} s "
+    f"\nDauer Berechnung aller {len(DATASETS)} Heatmaps: {elapsed_s:.2f} s "
     f"({elapsed_s / 60.0:.2f} min)"
 )
 
 
 # %% [markdown]
-# ## K. Figur 2×3: Inputs (oben) + LRP-Heatmaps (unten)
+# ## K. Figur 2×4: Inputs (oben) + LRP-Heatmaps (unten)
 #
-# Drei Spalten, eine je Datensatz **(1)**–**(3)**.
+# Vier Spalten, eine je Datensatz **(1)**–**(4)**.
 #
 # - Obere Reihe: Input-Bild, sagittal `x=70`, eigene Colorbar. Rechte
-#   Thalamus-Maske in Grün (`alpha=0.5`).
+#   Thalamus-Maske nur als grüne Umrandung (innen transparent).
 # - Untere Reihe: LRP-Relevanzen auf der Intensitätsskala (bei aktivem z-Score
 #   `R · σ`), eigene Colorbar je Panel (`vmin/vmax = ±P99.5(|R|)` nur für die
 #   Farbskala). `|R|_max` im Titel ist der Peak nach der Rücktransformation.
@@ -726,7 +748,7 @@ print(
 #
 
 # %%
-fig, axes = plt.subplots(2, 3, figsize=(14.5, 10.4))
+fig, axes = plt.subplots(2, len(DATASETS), figsize=(4.8 * len(DATASETS), 10.4))
 fig.suptitle(
     (
         f"Subject {subject_id_plot}  ·  IDX_PRED={IDX_PRED}/{N_SUBJ_PRED}  ·  "
@@ -737,6 +759,7 @@ fig.suptitle(
 
 keys = list(DATASETS.keys())
 im_vols = []
+COLOR_OUTLINE = COLOR_RIGHT[:3]
 for col, key in enumerate(keys):
     ax = axes[0, col]
     vol = plot_vols[key]
@@ -745,7 +768,13 @@ for col, key in enumerate(keys):
     vmax_i = float(np.percentile(pos, 99.5)) if pos.size else 1.0
     r_slc = sagittal_slc(right.astype(np.float32), cx) > 0
     im = ax.imshow(sagittal_slc(vol, cx), cmap="gray", vmin=0.0, vmax=vmax_i)
-    ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    if np.any(r_slc):
+        ax.contour(
+            r_slc.astype(np.float32),
+            levels=[0.5],
+            colors=[COLOR_OUTLINE],
+            linewidths=1.5,
+        )
     ax.set_title(
         f"{DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
@@ -772,7 +801,13 @@ for col, key in enumerate(keys):
         vmin=-vmax_r,
         vmax=vmax_r,
     )
-    ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    if np.any(r_slc):
+        ax.contour(
+            r_slc.astype(np.float32),
+            levels=[0.5],
+            colors=[COLOR_OUTLINE],
+            linewidths=1.5,
+        )
     ax.set_title(
         f"LRP · {DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
@@ -796,7 +831,14 @@ for col, im in enumerate(im_lrps):
     cbar.set_label("LRP-Relevanz")
 
 fig.legend(
-    handles=[Patch(facecolor=COLOR_RIGHT, edgecolor="none", label="rechter Thalamus")],
+    handles=[
+        Patch(
+            facecolor="none",
+            edgecolor=COLOR_OUTLINE,
+            linewidth=1.5,
+            label="rechter Thalamus",
+        )
+    ],
     loc="lower center",
     ncol=1,
     frameon=False,
@@ -809,7 +851,7 @@ if SHOW_PLOTS_INLINE:
 plt.close(fig)
 
 print(
-    f"Heatmap-Berechnung (Abschnitt J): {elapsed_s:.2f} s für alle 3 Modelle "
+    f"Heatmap-Berechnung (Abschnitt J): {elapsed_s:.2f} s für alle {len(DATASETS)} Modelle "
     f"(Subject {subject_id_plot})."
 )
 
