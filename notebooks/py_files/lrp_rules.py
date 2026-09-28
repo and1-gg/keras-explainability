@@ -251,16 +251,120 @@ def active_rules(model: Model, **lrp_kwargs) -> None:
 #
 # [↑ Inhalt](#top)
 #
-# Vier Merkmale, eine Ausgabe, kein Bias. Das vierte Merkmal hat die **größte Aktivierung** und das **Gewicht 0**. Daran sieht man später, ob eine Regel den Inhalt benutzt oder ihn ignoriert.
+# ### Was hier passiert — und was nicht
 #
-# | Merkmal | Aktivierung $x$ | Gewicht $w$ | Beitrag $x w$ |
-# |---|---:|---:|---:|
-# | Stütze | 1 | +4 | +4 |
-# | Widerspruch | 1 | −3 | −3 |
-# | schwache Stütze | 1 | +1 | +1 |
-# | totes Gewicht | 5 | 0 | 0 |
+# Hier wird **nichts trainiert, und es gibt keinen Datensatz.** Das ganze „Netz" ist eine Zeile
+# Rechnung, und alle Gewichte sind von Hand eingetragen. Das ist Absicht:
+#
+# > Eine Erklärungsmethode kann man nur an einem Modell prüfen, dessen Antwort man **vorher schon
+# > kennt**.
+#
+# Bei einem echten, trainierten Netz weiß niemand im Voraus, welches Merkmal wie wichtig ist. Dann
+# kann man auch nicht entscheiden, ob LRP die Wahrheit ausgibt oder Unsinn — man hat ja nichts zum
+# Vergleichen. Hier kennen wir die Wahrheit vorher, also ist jede Zahl überprüfbar. Deshalb stehen
+# am Ende jeder Zelle `assert`-Zeilen: sie vergleichen das Ergebnis mit der Handrechnung.
+#
+# ### Das Modell
+#
+# Eine einzige `Dense`-Schicht: **4 Eingänge, 1 Ausgang, kein Bias, keine Aktivierungsfunktion.**
+# Damit ist das Netz nichts weiter als eine gewichtete Summe:
+#
+# $$y = x_1 w_1 + x_2 w_2 + x_3 w_3 + x_4 w_4$$
+#
+# Vier Begriffe, die im Rest des Notebooks ständig vorkommen:
+#
+# | Begriff | Symbol | Was es hier ist |
+# |---|---|---|
+# | **Aktivierung** | $x_i$ | der Wert, der in die Schicht hineingeht. In einem tiefen Netz wäre das die Ausgabe der Schicht darunter — hier ist die Schicht darunter die Eingabe selbst, also ist „Aktivierung" schlicht „Eingabewert". |
+# | **Gewicht** | $w_i$ | die Stärke der Verbindung von Eingang $i$ zum Ausgabeneuron. Normalerweise gelernt, hier hingeschrieben. |
+# | **Beitrag** | $x_i w_i$ | was Eingang $i$ zum Score beisteuert. Das ist eine Eigenschaft des *Netzes*. |
+# | **Relevanz** | $R_i$ | die Zahl, die **LRP hinterher ausrechnet**. Ob sie mit dem Beitrag übereinstimmt, hängt von der Regel ab — genau darum geht es in diesem Notebook. |
+#
+# Zu den beiden Arrays in der Zelle unten:
+#
+# * `WEIGHTS` hat die Form `(4, 1)` — **eine Zeile je Eingang, eine Spalte je Ausgabeneuron.** Das
+#   ist die Keras-Konvention für `Dense`-Gewichte und der Grund für die doppelten Klammern.
+# * `X_SCORE` ist **ein einziges Beispiel** mit vier Zahlen, kein Datensatz mit vier Zeilen.
+#   `explain()` macht daraus intern einen Batch der Größe 1.
+#
+# ### Die vier Merkmale
+#
+# | Merkmal | Aktivierung $x$ | Gewicht $w$ | Beitrag $x w$ | Rolle in diesem Beispiel |
+# |---|---:|---:|---:|---|
+# | Stütze | 1 | +4 | **+4** | zieht den Score stark nach oben |
+# | Widerspruch | 1 | −3 | **−3** | zieht ihn nach unten |
+# | schwache Stütze | 1 | +1 | **+1** | zieht ihn schwach nach oben |
+# | totes Gewicht | **5** | **0** | **0** | **der lauteste Eingang — ganz ohne Wirkung** |
 #
 # $$y = 4 - 3 + 1 + 0 = 2$$
+#
+# Die Namen beschreiben **Rollen in diesem Beispiel**, keine echten Messgrößen. „Totes Gewicht"
+# heißt: das *Gewicht* ist tot (0). Der *Eingabewert* ist sehr lebendig (5).
+#
+# ### Warum genau diese Zahlen
+#
+# **Warum $x = 1$ bei den ersten drei?** Damit der Beitrag *gleich dem Gewicht* ist. Man muss nicht
+# multiplizieren und kann jede Regel im Kopf nachrechnen. Das Gewicht ist dann die einzige Größe,
+# die sich zwischen den drei Merkmalen unterscheidet.
+#
+# **Warum +4, −3, +1?** Sie decken die drei Fälle ab, die eine Regel auseinanderhalten können muss:
+# *stark dafür*, *dagegen*, *schwach dafür*. Das Verhältnis $4 : 1$ der beiden Stützen ergibt in
+# Abschnitt 2 glatte Zahlen ($\tfrac45$ und $\tfrac15$ von $y$). Und die $-3$ ist bewusst groß genug,
+# um zu zählen, aber zu klein, um den Score zu kippen: $y = 2 > 0$. Das ist wichtig, weil α1β0 in
+# Abschnitt 2 die Frage „was spricht für den **positiven** Score?" beantworten soll — und dabei
+# ausgerechnet diesen Widerspruch verschweigt.
+#
+# **Warum $x = 5$ und $w = 0$ beim vierten?** Das ist die eigentliche Sonde des Beispiels. Dieses
+# Merkmal hat die **fünffache Aktivierung** aller anderen und trotzdem **keine Verbindung** zur
+# Ausgabe. Daran lässt sich jede Regel mit einem einzigen Blick einordnen:
+#
+# | Was eine Regel beim „toten Gewicht" ausgibt | Was das über die Regel verrät |
+# |---|---|
+# | 0 | Sie folgt der **Wirkung**. So verhalten sich LRP-0, ε, α1β0 und α2β1 — sie alle multiplizieren mit $x_i w_i$, und $w_i = 0$ löscht alles aus. |
+# | etwas ≠ 0 | Sie folgt **nicht** dem Inhalt. `flat` gibt ihm $y/4 = 0.5$, genau so viel wie der starken Stütze (Abschnitt 4). |
+#
+# Damit steht die Kernaussage des ganzen Abschnitts in einer Zeile:
+#
+# > **Laut ist nicht wichtig.** Eine große Aktivierung erzeugt keine Relevanz, solange kein Gewicht
+# > sie bis zur Ausgabe durchlässt.
+#
+# Das ist der häufigste Anfängerfehler beim Lesen von Heatmaps: hell mit wichtig zu verwechseln.
+#
+# **Warum kein Bias?** Ein Bias saugt einen Teil der Relevanz auf, dann wäre $\sum_i R_i < y$. Ohne
+# Bias gilt die Erhaltung exakt, und man kann an jeder Zelle ablesen, ob eine Regel Relevanz
+# verliert — LRP-ε tut das nämlich absichtlich (Abschnitt 5).
+#
+# **Warum vier Merkmale und nicht zwei oder zehn?** Vier ist das Minimum, um alle vier Rollen zu
+# zeigen; bei zehn wäre das Balkendiagramm unleserlich und die Handrechnung mühsam.
+#
+# ### Und in einem echten Netz?
+#
+# Dieselbe Sonde kommt in Teil II als Bild wieder: dort ist der **Fleck** der hellste Bereich des
+# Bildes und hat nachweislich **keinen** Einfluss auf die Vorhersage — gemessen, nicht behauptet
+# (Abschnitt 11.2). Bei einem MRT-Modell wie in den anderen Notebooks dieses Repos wäre das ein
+# besonders helles Voxel, das das Netz schlicht ignoriert. Dieses Beispiel mit vier Zahlen ist der
+# kleinstmögliche Beweis dafür, dass man Heatmaps nicht nach Helligkeit lesen darf.
+#
+# ### Die Formel: LRP-0 (z-Regel)
+#
+# $$
+# R_i \;=\; \sum_j \frac{x_i w_{ij}}{z_j}\, R_j ,
+# \qquad z_j = \sum_l x_l w_{lj}
+# $$
+#
+# $i$ zählt die Eingänge, $j$ die Ausgabeneuronen. $z_j$ ist die gesamte gewichtete Summe, die in
+# Neuron $j$ ankommt — also der Nenner, durch den geteilt wird.
+#
+# Hier gibt es **nur ein Ausgabeneuron**, dessen Relevanz der Score selbst ist: $R_1 = y = z_1$.
+# Damit kürzt sich der Bruch komplett weg:
+#
+# $$
+# R_i \;=\; \frac{x_i w_i}{z}\cdot z \;=\; x_i w_i
+# $$
+#
+# **Deshalb ist die Relevanz hier exakt der Beitrag.** Das ist kein Zufall und keine Eigenschaft
+# von LRP-0 im Allgemeinen, sondern gilt, weil das Netz genau eine Schicht ohne Bias hat. Ab
+# Abschnitt 6 (zwei Schichten) stimmt das nicht mehr.
 #
 # **Frage an LRP-0:** Welchen Anteil hat jedes Merkmal am Score, gemessen an seinem Beitrag $x w$?
 #
@@ -269,8 +373,8 @@ def active_rules(model: Model, **lrp_kwargs) -> None:
 
 # %%
 FEATURE_NAMES = ["Stütze", "Widerspruch", "schwache Stütze", "totes Gewicht"]
-WEIGHTS = np.array([[4.0], [-3.0], [1.0], [0.0]], dtype=np.float32)
-X_SCORE = np.array([1.0, 1.0, 1.0, 5.0], dtype=np.float32)
+WEIGHTS = np.array([[4.0], [-3.0], [1.0], [0.0]], dtype=np.float32)  # (Eingaenge, Ausgaenge)
+X_SCORE = np.array([1.0, 1.0, 1.0, 5.0], dtype=np.float32)           # ein einzelnes Beispiel
 
 score_model = make_dense(WEIGHTS)
 contributions = X_SCORE * WEIGHTS.ravel()
@@ -292,6 +396,30 @@ np.testing.assert_allclose(r_lrp0.sum(), y_score, atol=1e-5)
 # [↑ Inhalt](#top)
 #
 # **Aufgabenstellung.** Der Score ist positiv ($y = 2$). Nenne nur die Merkmale, die ihn nach oben ziehen. Was ihn drückt, soll in der Erklärung nicht vorkommen.
+#
+# ### Die Formel: LRP-αβ, hier mit $\alpha = 1$, $\beta = 0$
+#
+# $$
+# R_i \;=\; \sum_j \left(
+#   \alpha\,\frac{(x_i w_{ij})^{+}}{\sum_l (x_l w_{lj})^{+}}
+#   \;-\;
+#   \beta\,\frac{(x_i w_{ij})^{-}}{\sum_l (x_l w_{lj})^{-}}
+# \right) R_j ,
+# \qquad \alpha - \beta = 1
+# $$
+#
+# mit $(x)^{+} = \max(0, x)$ und $(x)^{-} = \min(0, x)$. Positive und negative Beiträge werden also
+# **getrennt gesammelt und getrennt normiert** — jede Seite summiert sich für sich auf 1.
+#
+# Für $\alpha = 1$, $\beta = 0$ fällt der zweite Term ersatzlos weg:
+#
+# $$
+# R_i \;=\; \frac{(x_i w_i)^{+}}{\sum_l (x_l w_l)^{+}}\; y
+# $$
+#
+# Hier sind die positiven Beiträge $+4$ und $+1$, ihre Summe ist 5. Der Widerspruch ($-3$) taucht in
+# keinem der beiden Terme auf: im $\alpha$-Term ist $(-3)^{+} = 0$, und der $\beta$-Term existiert
+# wegen $\beta = 0$ gar nicht.
 #
 # **Warum diese Regel.** $\alpha=1$, $\beta=0$ behält die positiven Beiträge und verwirft die negativen. Die positiven Beiträge teilen sich $y$ im Verhältnis ihrer Größe. $\alpha - \beta = 1$ hält die Summe bei $y$, sobald es positive Beiträge gibt.
 #
@@ -323,6 +451,20 @@ np.testing.assert_allclose(r_a1b0, [1.6, 0.0, 0.4, 0.0], atol=1e-5)
 # [↑ Inhalt](#top)
 #
 # **Aufgabenstellung.** Dieselben vier Merkmale. Zeige beide Richtungen: positive Relevanz stützt den Score, negative Relevanz widerspricht ihm. Die stützende Seite soll doppelt so stark gewichtet sein wie die widersprechende, die Summe soll $y$ bleiben.
+#
+# ### Die Formel: LRP-αβ, hier mit $\alpha = 2$, $\beta = 1$
+#
+# Dieselbe Formel wie in Abschnitt 2, nur mit anderen Faktoren — und diesmal bleibt der zweite Term
+# stehen:
+#
+# $$
+# R_i \;=\; \underbrace{2 \cdot \frac{(x_i w_i)^{+}}{\sum_l (x_l w_l)^{+}}\; y}_{\text{stützende Seite}}
+# \;\;-\;\; \underbrace{1 \cdot \frac{(x_i w_i)^{-}}{\sum_l (x_l w_l)^{-}}\; y}_{\text{widersprechende Seite}}
+# $$
+#
+# Die beiden Nenner in diesem Beispiel: positive Seite $4 + 1 = 5$, negative Seite $-3$. Beachte,
+# dass der $\beta$-Term ein **Minus vor einem Bruch aus zwei negativen Zahlen** ist — das Ergebnis
+# ist negativ, und genau deshalb erscheinen diese Merkmale als negative Balken.
 #
 # **Warum diese Regel.** $\alpha=2$, $\beta=1$ erfüllt $\alpha - \beta = 1$. Jeder positive Beitrag wird mit 2 gewichtet, jeder negative mit 1, jeweils normiert auf die eigene Seite. Die negative Relevanz ist damit lesbar als „spricht dagegen“, ohne dass die Summe von $y$ abweicht — **solange beide Seiten vorkommen**.
 #
@@ -395,6 +537,22 @@ np.testing.assert_allclose(r_pos.sum(), 2.0 * y_pos, atol=1e-4)
 #
 # **Aufgabenstellung.** Verteile die Relevanz des Scores so, als wäre jede Aktivierung 1 und jedes Gewicht 1. Die Erklärung soll ein Nullmodell sein: sie darf weder auf die große Aktivierung „totes Gewicht“ noch auf die echten Gewichte reagieren.
 #
+# ### Die Formel: flat
+#
+# $$
+# R_i \;=\; \sum_j \frac{1}{n}\, R_j
+# $$
+#
+# $n$ ist die Zahl der Eingänge der Schicht. Weder $x$ noch $w$ kommen vor — das ist der ganze
+# Punkt.
+#
+# Gleichwertige Lesart, und genau so ist es im Repo implementiert: **setze vor der z-Regel
+# $x \leftarrow 1$ und $w \leftarrow 1$.** Dann wird aus dem Zähler $x_i w_{ij} = 1$ und aus dem
+# Nenner $z_j = \sum_l 1 = n$, und die z-Regel aus Abschnitt 1 geht von selbst in die Formel oben
+# über.
+#
+# Hier: $n = 4$, also $R_i = y/4 = 0.5$ für **jedes** Merkmal.
+#
 # **Warum diese Regel.** `flat` ersetzt vor der z-Regel Aktivierung und Gewicht durch Einsen. Bei vier Eingängen ist der flache Nenner 4, jedes Merkmal bekommt $y / 4 = 0.5$.
 #
 # **Was an diesem Beispiel sichtbar werden soll.** Stütze, Widerspruch, schwache Stütze und das tote Gewicht sind gleichauf, obwohl die Beiträge $+4, -3, +1, 0$ sind und das tote Gewicht die Aktivierung 5 hat.
@@ -420,11 +578,72 @@ np.testing.assert_allclose(r_flat, np.full(4, y_score / 4.0), atol=1e-5)
 #
 # [↑ Inhalt](#top)
 #
-# **Aufgabenstellung.** Eine Einnahme von $+1$ und eine Ausgabe von $-0.999$ lassen den Saldo bei $y \approx 0.001$. LRP-0 erklärt diesen winzigen Saldo mit zwei Relevanzen vom Betrag $\approx 1$, die sich gegenseitig fast auslöschen. Ist das eine belastbare Zerlegung oder ein Artefakt der Division durch einen sehr kleinen Nenner?
+# **Aufgabenstellung.** Eine Einnahme von $+1$ und eine Ausgabe von $-0.999$ lassen den Saldo bei
+# $y \approx 0.001$. LRP-0 erklärt diesen winzigen Saldo mit zwei Relevanzen vom Betrag $\approx 1$,
+# die sich gegenseitig fast auslöschen. Ist das eine belastbare Zerlegung oder ein Artefakt der
+# Division durch einen sehr kleinen Nenner?
 #
-# **Warum diese Regel.** LRP-ε vergrößert den Nenner um $\varepsilon\,\mathrm{sign}(z)$. Der Anteil $\varepsilon / (|z| + \varepsilon)$ wird vom Stabilisator geschluckt und keinem Merkmal zugeteilt. Die **Form** der Erklärung (Einnahme gegen Ausgabe) bleibt auf dieser einen Schicht erhalten, der **Betrag** fällt. Ein größeres $\varepsilon$ schluckt mehr.
+# **Warum diese Regel.** LRP-ε vergrößert den Nenner um $\varepsilon\,\mathrm{sign}(z)$. Der Anteil
+# $\varepsilon / (|z| + \varepsilon)$ wird vom Stabilisator geschluckt und keinem Merkmal zugeteilt.
+# Die **Form** der Erklärung (Einnahme gegen Ausgabe) bleibt auf dieser einen Schicht erhalten, der
+# **Betrag** fällt. Ein größeres $\varepsilon$ schluckt mehr.
 #
-# **Faktoren.** LRP-0 und $\varepsilon \in \{0.01,\, 0.1,\, 1,\, 10\}$.
+# ### Die Formel: LRP-ε
+#
+# $$
+# R_i \;=\; \sum_j \frac{x_i w_{ij}}{z_j + \varepsilon\,\mathrm{sign}(z_j)}\, R_j ,
+# \qquad z_j = \sum_l x_l w_{lj}
+# $$
+#
+# Einziger Unterschied zu LRP-0: der Nenner wird um $\varepsilon$ **vergrößert**. Das
+# $\mathrm{sign}(z_j)$ sorgt dafür, dass der *Betrag* des Nenners wächst, egal welches Vorzeichen
+# $z_j$ hat. Was durch das Aufblähen des Nenners verloren geht, wird **keinem Merkmal zugeteilt** —
+# es verschwindet. Deshalb ist $\sum_i R_i < y$, und zwar mit Absicht.
+#
+# > **Hinweis zur Implementierung.** Tabelle 1.1 im Paper schreibt $\varepsilon + \sum_l x_l w_{lj}$.
+# > Dieses Repo rechnet $z_j + \varepsilon\,\mathrm{sign}(z_j)$. Für positives $z_j$ ist das
+# > dasselbe; für negatives $z_j$ dämpft die Repo-Variante, während die Paper-Schreibweise den
+# > Nenner verkleinern und damit verstärken würde. Die Repo-Variante ist die in der Praxis übliche.
+#
+# Auch hier gibt es nur ein Ausgabeneuron mit $R_j = y = z$, also kürzt sich wieder fast alles weg:
+#
+# $$
+# R_i \;=\; x_i w_i \cdot \underbrace{\frac{z}{z + \varepsilon\,\mathrm{sign}(z)}}_{\text{ein gemeinsamer Faktor}}
+# \;=\; x_i w_i \cdot \frac{|z|}{|z| + \varepsilon}
+# $$
+#
+# **Auf einer einzelnen Schicht ist ε also nur ein Maßstab**: jedes Merkmal wird mit demselben
+# Faktor multipliziert, die Vorzeichen und die Verhältnisse bleiben. Mit $z = 0.001$ ergibt das
+# $0.001 / (0.001 + \varepsilon)$ — genau die Zahlen der Tabelle unten. Erst über **mehrere**
+# Schichten hinweg kann ε die Form der Erklärung ändern; das ist Abschnitt 6.
+#
+# ### Warum ausgerechnet $-0.999$
+#
+# Das Netz ist wieder eine einzige Dense-Schicht, diesmal mit nur zwei Eingängen, beide auf $x = 1$.
+# Die ganze Konstruktion steckt in den Gewichten: $1 - 0.999 = 0.001$. Das ist der **Nenner nahe
+# null**, für den LRP-ε überhaupt erfunden wurde.
+#
+# Bei LRP-0 ist die Relevanz genau der Beitrag, also $R = [+1,\; -0.999]$. Die beiden Zahlen sind
+# rund **tausendmal größer als das, was sie erklären sollen**:
+#
+# $$\frac{\max_i |R_i|}{y} = \frac{1}{0.001} = 1000$$
+#
+# Eine Erklärung, deren Einzelteile tausendmal größer sind als das Ergebnis, ist keine Zerlegung
+# mehr, sondern eine Division durch fast null. Genau dieses Verhältnis fährt die Zelle unten
+# herunter — es steht als letzte Spalte in der Tabelle.
+#
+# > **Merksatz:** Eine große Relevanzzahl ist nicht automatisch eine aussagekräftige. Erst das
+# > Verhältnis zu dem, was erklärt wird, sagt etwas.
+#
+# **Warum nicht $-0.99$?** Dann wäre $y = 0.01$ und das Verhältnis nur 100 — der Effekt wäre da,
+# aber weniger deutlich. **Warum nicht $-0.99999$?** Dann läge $y$ in der Nähe der Rechengenauigkeit
+# von `float32` (rund 7 Dezimalstellen), und man wüsste nicht mehr, ob man LRP beobachtet oder
+# Rundungsfehler. $-0.999$ liegt bequem dazwischen.
+#
+# **Faktoren.** LRP-0 und $\varepsilon \in \{0.01,\, 0.1,\, 1,\, 10\}$. Alle vier sind **viel größer**
+# als $|z| = 0.001$. Für $\varepsilon \gg |z|$ ist der Dämpfungsfaktor
+# $|z| / (|z| + \varepsilon) \approx |z| / \varepsilon$ — deshalb fällt $|R|_{\max}$ in der Tabelle je
+# ε-Schritt um etwa den Faktor 10, genau wie ε um den Faktor 10 steigt.
 #
 # Auf dem Score aus Abschnitt 1 passiert dasselbe, nur ohne Explosion: dort ist $z = 2$ gutartig, und ε skaliert alle vier Relevanzen mit demselben Faktor $2 / (2 + \varepsilon)$. Die Frage „was ist positiv, was ist negativ?“ beantwortet ε deshalb nicht. Dafür sind αβ und flat da. Der Vergleich steht in Abschnitt 7.
 #
@@ -454,6 +673,7 @@ for label, epsilon in epsilon_factors:
         "Summe R": relevance.sum(),
         "Summe / y": relevance.sum() / prediction,
         "|R| max": np.max(np.abs(relevance)),
+        "|R| max / y": np.max(np.abs(relevance)) / prediction,
     })
 
 ledger_table = pd.DataFrame(ledger_rows)
@@ -463,6 +683,7 @@ display(ledger_table.style.format({
     "Summe R": "{:.6f}",
     "Summe / y": "{:.4f}",
     "|R| max": "{:.4f}",
+    "|R| max / y": "{:.1f}",
 }).hide(axis="index"))
 
 fig, ax = plt.subplots(figsize=(7.2, 3.8))
@@ -478,6 +699,8 @@ plt.show()
 lrp0_peak = float(ledger_table.loc[0, "|R| max"])
 assert ledger_table["|R| max"].is_monotonic_decreasing
 assert float(ledger_table["|R| max"].iloc[-1]) < lrp0_peak / 100
+# LRP-0 erklaert einen Saldo von 0.001 mit Relevanzen vom Betrag 1 -- Faktor 1000.
+np.testing.assert_allclose(float(ledger_table.loc[0, "|R| max / y"]), 1000.0, rtol=1e-3)
 
 
 # %% [markdown]
@@ -486,16 +709,97 @@ assert float(ledger_table["|R| max"].iloc[-1]) < lrp0_peak / 100
 #
 # [↑ Inhalt](#top)
 #
-# **Aufgabenstellung.** Der Score entsteht aus zwei versteckten Neuronen. Beide gehen mit Gewicht 1 in die Ausgabe. Eines ist stark, eines ist nur ein leiser Nebenpfad. Welche Eingaben tragen den Score, und ab welchem $\varepsilon$ ist der Nebenpfad in der Erklärung praktisch verschwunden?
+# **Aufgabenstellung.** Der Score entsteht aus zwei versteckten Neuronen. Beide gehen mit Gewicht 1
+# in die Ausgabe. Eines ist stark, eines ist nur ein leiser Nebenpfad. Welche Eingaben tragen den
+# Score, und ab welchem $\varepsilon$ ist der Nebenpfad in der Erklärung praktisch verschwunden?
+#
+# ### Die Formel: dieselbe wie in Abschnitt 5, nur zweimal angewendet
+#
+# $$
+# R_i^{[l-1]} \;=\; \sum_j \frac{x_i^{[l-1]} w_{ij}^{[l]}}{z_j^{[l]} + \varepsilon\,\mathrm{sign}(z_j^{[l]})}\, R_j^{[l]}
+# $$
+#
+# Der hochgestellte Index $[l]$ ist neu: er zählt die Schichten. Dasselbe $\varepsilon$ liegt auf
+# **beiden** Dense-Schichten, die Relevanz muss also zweimal durch diesen Nenner.
+#
+# In Abschnitt 5 war das folgenlos, weil es nur eine Schicht gab und der Faktor für alle Merkmale
+# derselbe war. Hier ist er es nicht mehr: beim Rückwärtsgehen durch ein verstecktes Neuron mit
+# Aktivierung $h$ wird dessen Relevanz mit
+#
+# $$\frac{h}{h + \varepsilon}$$
+#
+# weitergereicht — und $h$ ist für die beiden Pfade **verschieden**. Damit ändert ε hier zum ersten
+# Mal nicht nur den Maßstab, sondern die **Form** der Erklärung.
+#
+# ### Das Netz: zwei Pfade, die sich nicht kreuzen
+#
+# Das ist das **erste Netz in diesem Notebook mit einer versteckten Schicht** — bisher war es immer
+# nur Eingabe → Ausgabe. Es braucht sie, weil ε genau dort wirkt, wo Relevanz *durch* ein Neuron
+# hindurchmuss.
 #
 # ```text
-# Signal A, Signal B  --·5-->   h_signal = 10  --·1-->  y = 10.4
-# Rauschen C, Rauschen D --·0.2--> h_rauschen = 0.4 --·1--^
+#   Signal A    ──5.0──┐
+#                      ├──▶  h_Signal   = 5 + 5     = 10.0  ──1──┐
+#   Signal B    ──5.0──┘                                          ├──▶  y = 10.4
+#   Rauschen C  ──0.2──┐                                          │
+#                      ├──▶  h_Rauschen = 0.2 + 0.2 =  0.4  ──1──┘
+#   Rauschen D  ──0.2──┘
 # ```
 #
-# Alle vier Eingaben sind 1. LRP-0 gibt $[5, 5, 0.2, 0.2]$. Das Verhältnis Signal zu Rauschen ist $25$.
+# Drei Bauentscheidungen, jede mit einem Zweck:
 #
-# **Warum ε hier die Form ändert und nicht nur die Summe.** Auf dem Weg zurück durch ein verstecktes Neuron wird dessen Relevanz mit $h / (h + \varepsilon)$ weitergereicht. Für $h = 10$ ist dieser Faktor bei moderatem $\varepsilon$ noch nahe 1. Für $h = 0.4$ fällt er schnell. Der schwache Pfad wird also überproportional geschluckt. Dasselbe $\varepsilon$ liegt hier auf beiden Dense-Schichten.
+# **1. Die Pfade kreuzen sich nicht.** Die Gewichtsmatrix der versteckten Schicht ist blockdiagonal
+# — Signal A und B gehen *nur* in $h_\text{Signal}$, Rauschen C und D *nur* in $h_\text{Rauschen}$.
+# Deshalb lässt sich jede Eingangsrelevanz eindeutig einem versteckten Neuron zuordnen. Würden sich
+# die Pfade mischen, könnte man die Wirkung von ε nicht mehr sauber „dem schwachen Pfad"
+# zuschreiben.
+#
+# **2. Beide versteckten Neuronen gehen mit Gewicht 1 in die Ausgabe.** Die Ausgabeschicht behandelt
+# sie exakt gleich. Jeder Unterschied im Ergebnis stammt damit allein aus den *versteckten
+# Aktivierungen* — nicht aus den Gewichten darüber. Ohne diese Gleichbehandlung wüsste man nicht,
+# welcher der beiden Effekte man gerade zusieht.
+#
+# **3. Alle vier Eingaben sind 1.** Wie in Abschnitt 1: der Beitrag ist das Gewicht, die Rechnung
+# bleibt im Kopf machbar. LRP-0 gibt daher exakt $[5,\, 5,\, 0.2,\, 0.2]$.
+#
+# ### Warum 5 und 0.2
+#
+# Entscheidend sind nicht die Gewichte selbst, sondern die **versteckten Aktivierungen**, die sie
+# erzeugen: $h_\text{Signal} = 10$ und $h_\text{Rauschen} = 0.4$. Beim Rückwärtsgehen durch ein
+# verstecktes Neuron wird dessen Relevanz mit dem Faktor $h / (h + \varepsilon)$ weitergereicht —
+# und dieser Faktor hängt **nur von $h$ und $\varepsilon$ ab**, nicht von den Gewichten darunter.
+#
+# Damit man überhaupt sehen kann, dass ε den schwachen Pfad *überproportional* schluckt, muss das
+# durchgefahrene ε **zwischen den beiden $h$-Werten liegen**. Genau dafür sind 10 und 0.4 gewählt:
+#
+# | ε | $h/(h+\varepsilon)$ für $h = 10$ | $h/(h+\varepsilon)$ für $h = 0.4$ |
+# |---|---:|---:|
+# | 0.01 | 0.999 | 0.976 |
+# | 0.1 | 0.990 | 0.800 |
+# | **1** | **0.909** | **0.286** |
+# | 10 | 0.500 | 0.038 |
+#
+# Bei $\varepsilon = 1$ bleibt der starke Pfad fast vollständig erhalten, während der schwache auf
+# gut ein Viertel fällt. Läge $h_\text{Rauschen}$ bei 8 statt 0.4, gäbe es **kein** ε, das die
+# beiden trennt — dann wäre das Beispiel nutzlos. Das Verhältnis $10 : 0.4 = 25$ ist also die
+# eigentliche Konstruktion; 5 und 0.2 sind nur die Gewichte, die es bei Eingaben von 1 erzeugen.
+#
+# ### Die ganze Kurve als Formel
+#
+# Der Effekt lässt sich geschlossen hinschreiben. **Die Ausgabeschicht ändert am Verhältnis
+# nichts**: dort steht für beide Pfade derselbe Nenner $z = 10.4 + \varepsilon$, beide werden also
+# gleich gedämpft. Erst die versteckte Schicht trennt sie:
+#
+# $$
+# \frac{R_{\text{Signal A}}}{R_{\text{Rauschen C}}}
+# = \underbrace{\frac{h_\text{S}}{h_\text{R}}}_{25}
+#   \cdot \frac{5 / (10 + \varepsilon)}{0.2 / (0.4 + \varepsilon)}
+# = 625 \cdot \frac{0.4 + \varepsilon}{10 + \varepsilon}
+# $$
+#
+# Für $\varepsilon = 0$ ergibt das $625 \cdot 0.04 = 25$ — das ist LRP-0. Für $\varepsilon = 10$
+# ergibt es $325$, also das Dreizehnfache. Die Zelle unten stellt diese Formel als eigene Spalte
+# neben die tatsächlich berechneten Zahlen und prüft sie per `assert`.
 #
 # **Faktoren.** Wieder LRP-0 und $\varepsilon \in \{0.01,\, 0.1,\, 1,\, 10\}$.
 #
@@ -528,6 +832,11 @@ print("Versteckte Aktivierungen [Signal, Rauschen]:", hidden_values)
 print("y =", float(np.asarray(path_model(x_path.reshape(1, -1))).ravel()[0]))
 active_rules(path_model, epsilon=1.0)
 
+def expected_ratio(epsilon: float) -> float:
+    """Geschlossene Form des Verhaeltnisses Signal/Rauschen: 625 * (0.4 + e) / (10 + e)."""
+    return 625.0 * (0.4 + epsilon) / (10.0 + epsilon)
+
+
 path_rows = []
 path_relevances = []
 for label, epsilon in epsilon_factors:
@@ -539,6 +848,7 @@ for label, epsilon in epsilon_factors:
         "Signal A": relevance[0],
         "Rauschen C": relevance[2],
         "Verhältnis Signal/Rauschen": relevance[0] / relevance[2],
+        "Formel 625·(0.4+ε)/(10+ε)": expected_ratio(0.0 if epsilon is None else float(epsilon)),
         "Summe R": relevance.sum(),
         "Summe / y": relevance.sum() / prediction,
     })
@@ -548,6 +858,7 @@ display(path_table.style.format({
     "Signal A": "{:.4f}",
     "Rauschen C": "{:.4f}",
     "Verhältnis Signal/Rauschen": "{:.1f}",
+    "Formel 625·(0.4+ε)/(10+ε)": "{:.1f}",
     "Summe R": "{:.4f}",
     "Summe / y": "{:.4f}",
 }).hide(axis="index"))
@@ -577,6 +888,8 @@ plt.show()
 ratios = path_table["Verhältnis Signal/Rauschen"].to_numpy()
 assert np.all(np.diff(ratios) > 0)
 np.testing.assert_allclose(path_relevances[0], [5.0, 5.0, 0.2, 0.2], atol=1e-4)
+# Die geschlossene Form trifft jeden einzelnen Faktor.
+np.testing.assert_allclose(ratios, path_table["Formel 625·(0.4+ε)/(10+ε)"].to_numpy(), rtol=1e-3)
 
 
 # %% [markdown]
@@ -586,6 +899,22 @@ np.testing.assert_allclose(path_relevances[0], [5.0, 5.0, 0.2, 0.2], atol=1e-4)
 # [↑ Inhalt](#top)
 #
 # Der Score aus Abschnitt 1 noch einmal unter jeder Regel. $\varepsilon = 1$ steht mit dabei, damit man sieht: auf dieser gut konditionierten Schicht ändert ε nur den Maßstab ($2/3$ von LRP-0), nicht die Rollen der Merkmale.
+#
+# ### Alle vier Formeln nebeneinander
+#
+# Überall ist $z_j = \sum_l x_l w_{lj}$, $(x)^{+} = \max(0,x)$, $(x)^{-} = \min(0,x)$.
+#
+# | Regel | $R_i = \sum_j (\dots)\, R_j$ | Summe | Beantwortet |
+# |---|---|---|---|
+# | **LRP-0** | $\dfrac{x_i w_{ij}}{z_j}$ | $= y$ | Wie groß ist der Beitrag? |
+# | **LRP-ε** | $\dfrac{x_i w_{ij}}{z_j + \varepsilon\,\mathrm{sign}(z_j)}$ | $< y$ | Wie viel davon ist belastbar? |
+# | **LRP-α1β0** | $\dfrac{(x_i w_{ij})^{+}}{\sum_l (x_l w_{lj})^{+}}$ | $= y$ | Was spricht dafür? |
+# | **LRP-α2β1** | $2\,\dfrac{(x_i w_{ij})^{+}}{\sum_l (x_l w_{lj})^{+}} - \dfrac{(x_i w_{ij})^{-}}{\sum_l (x_l w_{lj})^{-}}$ | $= y$, wenn beide Seiten vorkommen | Was dafür, was dagegen? |
+# | **flat** | $\dfrac{1}{n}$ | $= y$ | Welche Eingänge waren überhaupt beteiligt? |
+#
+# Man sieht die Verwandtschaft: die ersten beiden unterscheiden sich nur im Nenner, die beiden
+# αβ-Zeilen nur in den Vorfaktoren, und `flat` ist der Grenzfall, in dem Zähler und Nenner die
+# Daten gar nicht mehr enthalten.
 #
 # | Regel | Stütze | Widerspruch | schwache Stütze | totes Gewicht | Summe |
 # |---|---:|---:|---:|---:|---:|
@@ -1070,8 +1399,19 @@ assert ablation["Plus"] > 0 > ablation["Balken"]
 # **Frage.** Wie verteilt sich der Score auf die Pixel, wenn man nichts stabilisiert und nichts
 # bevorzugt?
 #
-# **Regel.** $z_{jk} = x_j w_{jk}$, also genau die Beitragszerlegung aus Teil I, Abschnitt 1 — nur
-# jetzt über mehrere Schichten hinweg und mit geteilten Gewichten.
+# ### Die Formel: LRP-0
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \frac{x_j^{[i-1]} w_{jk}^{[i]}}{\sum_l x_l^{[i-1]} w_{lk}^{[i]}}\; R_k^{[i]}
+# $$
+#
+# Das ist dieselbe Formel wie in Teil I, Abschnitt 1 — nur heißen die Indizes jetzt anders, weil
+# mehrere Schichten im Spiel sind: $[i]$ ist die Schicht, $j$ ein Neuron der unteren Schicht, $k$
+# eines der oberen. In einer Convolution laufen $j$ und $k$ über **Ort × Kanal**, und dieselben
+# $w^{[i]}$ werden an jedem Ort wiederverwendet. Für die Formel ändert das nichts.
+#
+# Eingesetzt in die allgemeine Regel aus Abschnitt 9 heißt das schlicht $z_{jk} = x_j w_{jk}$: der
+# Beitrag ist Aktivierung mal Gewicht, ohne jede Korrektur.
 #
 # **Was am Bild sichtbar werden soll.**
 #
@@ -1114,10 +1454,21 @@ np.testing.assert_allclose(summary_lrp0["Hintergrund"], 0.0, atol=1e-6)
 #
 # **Frage.** Welche Teile der Erklärung sind belastbar genug, um stehen zu bleiben?
 #
-# **Regel.** $\varepsilon$ wächst den Nenner:
-# $R_j = \sum_k \frac{x_j w_{jk}}{\varepsilon + z_k} R_k$. Neuronen, deren Nettobeitrag $z_k$ klein
-# gegen $\varepsilon$ ist, geben fast nichts weiter. Das Paper nennt das den **Sparsifizierungs-Effekt**:
-# „the relevance of neurons with weak net contributions is driven to zero by the stabilization term“.
+# ### Die Formel: LRP-ε
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \frac{x_j^{[i-1]} w_{jk}^{[i]}}{z_k^{[i]} + \varepsilon\,\mathrm{sign}(z_k^{[i]})}\; R_k^{[i]} ,
+# \qquad z_k^{[i]} = \sum_l x_l^{[i-1]} w_{lk}^{[i]}
+# $$
+#
+# Nur der Nenner unterscheidet sich von LRP-0: sein **Betrag** wächst um $\varepsilon$. Neuronen,
+# deren Nettobeitrag $z_k$ klein gegen $\varepsilon$ ist, geben fast nichts weiter — das ist der
+# **Sparsifizierungs-Effekt**, im Paper: „the relevance of neurons with weak net contributions is
+# driven to zero by the stabilization term“. Der geschluckte Anteil wird keinem Pixel zugeteilt,
+# also gilt $\sum_j R_j < y$.
+#
+# (Zur Schreibweise $\varepsilon\,\mathrm{sign}(z)$ statt $\varepsilon + z$ wie in Tabelle 1.1
+# siehe den Hinweis in Teil I, Abschnitt 5.)
 #
 # **Empfehlung des Papers.** fc-Schichten im oberen Teil des Netzes und die obersten
 # Convolution-Schichten.
@@ -1189,6 +1540,19 @@ assert epsilon_table["Konzentration Top-3"].is_monotonic_increasing
 # **Frage.** Convolution-Schichten sind stark nichtlinear; einzelne Pixel sauber in „dafür“ und
 # „dagegen“ zu trennen, gelingt dort kaum. Kann man stattdessen *Gruppen* von Pixeln gemeinsam
 # Relevanz geben und dabei die stützende Seite bevorzugen?
+#
+# ### Die Formel: LRP-γ
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k
+# \frac{x_j^{[i-1]}\big(w_{jk}^{[i]} + \gamma\,(w_{jk}^{[i]})^{+}\big)}
+#      {\sum_l x_l^{[i-1]}\big(w_{lk}^{[i]} + \gamma\,(w_{lk}^{[i]})^{+}\big)}\; R_k^{[i]}
+# $$
+#
+# Der Nenner ist hier **nicht** aufgebläht wie bei ε, sondern exakt die Summe über die Zähler —
+# deshalb bleibt die Summe der Relevanz erhalten. Verändert werden die **Gewichte**: positive
+# werden auf das $(1+\gamma)$-fache gestreckt, negative bleiben, wie sie sind. Für $\gamma = 0$
+# steht wieder LRP-0 da.
 #
 # **Regel.** $\gamma$ verstärkt nur die positiven Gewichte:
 # $w_{jk} \to w_{jk} + \gamma (w_{jk})^+$. Im Repo steht dafür genau eine Zeile
@@ -1276,6 +1640,27 @@ assert gamma_table["Abstand zu α1β0"].iloc[-1] < gamma_table["Abstand zu α1β
 # **Frage.** Dieselbe wie bei γ — positive Beiträge bevorzugen — aber mit einem festen Verhältnis
 # statt einer Gewichtsverzerrung.
 #
+# ### Die Formel: LRP-αβ
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \left(
+#   \alpha\,\frac{(x_j^{[i-1]} w_{jk}^{[i]})^{+}}{\sum_l (x_l^{[i-1]} w_{lk}^{[i]})^{+}}
+#   \;-\;
+#   \beta\,\frac{(x_j^{[i-1]} w_{jk}^{[i]})^{-}}{\sum_l (x_l^{[i-1]} w_{lk}^{[i]})^{-}}
+# \right) R_k^{[i]} ,
+# \qquad \alpha - \beta = 1
+# $$
+#
+# Die beiden hier benutzten Fälle ausgeschrieben:
+#
+# | | Formel | Ergebnis |
+# |---|---|---|
+# | **α1β0** | $\displaystyle\sum_k \frac{(x_j w_{jk})^{+}}{\sum_l (x_l w_{lk})^{+}} R_k$ | nur positive Relevanz, $\sum_j R_j = y$ |
+# | **α2β1** | $\displaystyle\sum_k \left(2\,\frac{(x_j w_{jk})^{+}}{\sum_l (x_l w_{lk})^{+}} - \frac{(x_j w_{jk})^{-}}{\sum_l (x_l w_{lk})^{-}}\right) R_k$ | beide Vorzeichen, $\sum_j R_j \ne y$ |
+#
+# Es ist genau dieselbe Formel wie in Teil I, Abschnitte 2 und 3 — nur laufen $j$ und $k$ jetzt über
+# Ort × Kanal statt über vier Merkmale.
+#
 # **Regel.** Positive und negative Beiträge werden **getrennt** normiert und mit $\alpha$ bzw.
 # $\beta$ gewichtet, $\alpha - \beta = 1$. Im Repo ist $\alpha = \beta + 1$ als `assert` erzwungen.
 #
@@ -1333,8 +1718,15 @@ assert R_a2b1[MASKS["Balken"]].sum() < 0
 # **Frage.** Manchmal will man gar nicht wissen, *welches* Pixel im Fenster zählt, sondern nur,
 # *welcher Bildbereich* überhaupt beteiligt war. Wie sieht eine Erklärung aus, die genau das tut?
 #
-# **Regel.** $R_j = \sum_k \frac{1}{n_{i-1}} R_k$ — jeder Eingang des Fensters bekommt denselben
-# Anteil. Im Repo: `{"flat": True}`, intern `a ← 1`, `w ← 1` vor der z-Regel.
+# ### Die Formel: flat
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \frac{1}{n_{i-1}}\; R_k^{[i]}
+# $$
+#
+# $n_{i-1}$ ist die Zahl der Eingänge, die Neuron $k$ sieht — bei einer $3\times3$-Convolution auf
+# einem Kanal also 9, das **rezeptive Feld**. Weder $x$ noch $w$ kommen vor. Im Repo:
+# `{"flat": True}`, intern `a ← 1`, `w ← 1` vor der z-Regel (siehe Teil I, Abschnitt 4).
 #
 # **Empfehlung des Papers.** „to reduce the spatial resolution of heatmaps (by simply uniformly
 # redistributing relevance from some intermediate layer onto the input)“ und „if we simply want to
@@ -1413,16 +1805,33 @@ assert flat_frame.loc["Summe", "flat nur auf score"] < Y_IMAGE - 1e-3
 # oder den ganzen $\mathbb{R}^d$ (z-standardisierte Daten, wie die MRT-Volumen in diesem Repo).
 # Genau dafür sind die beiden letzten Zeilen von Tabelle 1.1 gemacht.
 #
-# **w²-Regel** ($\mathbb{R}^d$, keine Bereichsannahme):
-# $R_i^{[0]} = \sum_j \frac{(w_{ij}^{[1]})^2}{\sum_l (w_{lj}^{[1]})^2} R_j^{[1]}$.
-# Der Pixelwert kommt darin **überhaupt nicht vor**. Innerhalb eines rezeptiven Felds verteilt sich
-# die Relevanz allein nach der Gewichtsstärke.
+# ### Die Formel: w²-Regel
 #
-# **z$^\mathcal{B}$-Regel** (Pixel in $[l_i, h_i]$):
-# $R_i^{[0]} = \sum_j \frac{x_i w_{ij} - l_i (w_{ij})^+ - h_i (w_{ij})^-}
-# {\sum_l \big(x_l w_{lj} - l_l (w_{lj})^+ - h_l (w_{lj})^-\big)} R_j^{[1]}$.
-# Sie misst das Pixel nicht gegen 0, sondern **gegen die Ränder seines Kastens**. Ein Pixel mit Wert
-# 0 kann darin Relevanz bekommen, wenn 0 nicht der Rand ist.
+# Für eine Eingabe, die den ganzen $\mathbb{R}^d$ abdecken darf — keine Bereichsannahme:
+#
+# $$
+# R_i^{[0]} \;=\; \sum_j \frac{(w_{ij}^{[1]})^2}{\sum_l (w_{lj}^{[1]})^2}\; R_j^{[1]}
+# $$
+#
+# **Der Pixelwert $x_i$ kommt darin überhaupt nicht vor.** Innerhalb eines rezeptiven Felds
+# verteilt sich die Relevanz allein nach der Gewichtsstärke. Quadriert wird, damit das Vorzeichen
+# des Gewichts keine Rolle spielt und der Nenner nie null wird.
+#
+# ### Die Formel: z$^\mathcal{B}$-Regel
+#
+# Für Pixel, die in einem bekannten Kasten $[l_i, h_i]$ liegen:
+#
+# $$
+# R_i^{[0]} \;=\; \sum_j
+# \frac{x_i^{[0]} w_{ij}^{[1]} - l_i (w_{ij}^{[1]})^{+} - h_i (w_{ij}^{[1]})^{-}}
+#      {\sum_l \big(x_l^{[0]} w_{lj}^{[1]} - l_l (w_{lj}^{[1]})^{+} - h_l (w_{lj}^{[1]})^{-}\big)}\;
+# R_j^{[1]}
+# $$
+#
+# $l_i$ ist der kleinstmögliche, $h_i$ der größtmögliche Wert von Pixel $i$. Die Regel misst das
+# Pixel also **nicht gegen 0, sondern gegen die Ränder seines Kastens**. Ein Pixel mit Wert 0 kann
+# darin Relevanz bekommen — wenn 0 nicht der Rand ist. Setzt man $l = h = 0$, verschwinden die
+# beiden hinteren Terme und es bleibt exakt die z-Regel übrig; genau das wird unten geprüft.
 #
 # **Beide sind in `explainability` nicht implementiert.** Das ist auch nicht schlimm: man braucht
 # sie nur für *eine* Schicht. Vorgehen hier:
@@ -1585,13 +1994,26 @@ assert zero_share[-1] > zero_share[0]
 #
 # Das Paper behandelt beide knapp, und beide sind in diesem Repo fertig vorhanden.
 #
-# **Max-Pooling — winner-take-all.** Die gesamte Relevanz des Fensters geht an das Maximum. Im Repo
-# ist das der Default (`MaxPoolingLRP(strategy='winner-takes-all')`), technisch über den Gradienten
-# von `tf.nn.max_pool`.
+# **Max-Pooling — winner-take-all.** Die gesamte Relevanz des Fensters geht an das Maximum:
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \mathbf{1}\!\left[\, j = \arg\max_{l \in \text{Fenster}(k)} x_l^{[i-1]} \right] R_k^{[i]}
+# $$
+#
+# $\mathbf{1}[\cdot]$ ist 1, wenn die Bedingung zutrifft, sonst 0 — der Gewinner bekommt alles, alle
+# anderen nichts. Im Repo ist das der Default (`MaxPoolingLRP(strategy='winner-takes-all')`),
+# technisch über den Gradienten von `tf.nn.max_pool`.
 #
 # **Average-Pooling — lineare Schicht.** Average-Pooling ist eine lineare Schicht mit positiven
-# konstanten Gewichten, also gelten die Regeln von oben unverändert. Im Repo heißt diese Variante
-# `'redistribute'` (Default für `AveragePoolingLRP`) und entspricht der z-Regel.
+# konstanten Gewichten $w = 1/n$. Damit gilt die z-Regel unverändert, und weil alle Gewichte gleich
+# sind, kürzen sie sich heraus:
+#
+# $$
+# R_j^{[i-1]} \;=\; \sum_k \frac{x_j^{[i-1]}}{\sum_{l \in \text{Fenster}(k)} x_l^{[i-1]}}\; R_k^{[i]}
+# $$
+#
+# Jedes Pixel bekommt also seinen Anteil an der Fenstersumme. Im Repo heißt diese Variante
+# `'redistribute'` (Default für `AveragePoolingLRP`).
 #
 # **`'flat'` für Pooling.** Zusätzlich kennt das Repo `strategy='flat'`: die Relevanz wird
 # gleichmäßig über das Fenster verteilt, unabhängig von den Aktivierungen. Das ist die
