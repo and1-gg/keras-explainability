@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.16.6
 #   kernelspec:
 #     display_name: py-uv_keras-xai (uv)
 #     language: python
@@ -14,19 +14,21 @@
 # ---
 
 # %% [markdown]
-# # LRP-Heatmaps: drei Right-Thalamus-UKB-Modelle
+# # LRP-Heatmaps: vier Right-Thalamus-UKB-Modelle
 #
-# Vergleich von drei auf UKB trainierten `Right-Whole_thalamus`-CNNs:
+# Vergleich von vier auf UKB trainierten `Right-Whole_thalamus`-CNNs:
 #
 # 1. **unveränderte** MRI-Scans (`cropped.nii.gz`)
 # 2. **gejitterte** Scans (rechter Thalamus erhalten, Rest permutiert)
 # 3. **all-zero** außer rechtem Thalamus
+# 4. **rechter Thalamus = 0**, Rest unverändert (Umkehrung von (3))
 #
 # Ablauf: Vorhersagen für `N_SUBJ_PRED` Holdout-Subjects → Scatter/MAE/r →
 # für Subject `IDX_PRED` Input-Schnitte + neu berechnete unnormierte LRP-Heatmaps →
 # Gruppen-LRP über die ersten `N_GROUP` Subjects je Holdout-TSV (Sum-Norm) →
 # CPU- vs. GPU-Vergleich der LRP-Heatmaps (Abschnitt M) →
 # Folgeanalysen zur Device-Diskrepanz (Abschnitt N).
+#
 
 # %% [markdown]
 # ## A. Imports
@@ -57,8 +59,8 @@ from tqdm import tqdm
 # ## B. Konfiguration
 #
 # - `N_SUBJ_PRED`: Anzahl Holdout-Subjects für Vorhersage / Scatter (erste Zeilen
-#   der jeweiligen `predict.tsv`, Subject-IDs über alle drei Varianten gematcht).
-# - `IDX_PRED`: Index des Subjects für die 2×3-Figur; muss `0 <= IDX_PRED < N_SUBJ_PRED`
+#   der jeweiligen `predict.tsv`, Subject-IDs über alle vier Varianten gematcht).
+# - `IDX_PRED`: Index des Subjects für die 2×4-Figur; muss `0 <= IDX_PRED < N_SUBJ_PRED`
 #   erfüllen.
 # - `N_GROUP`: Anzahl Subjects je Holdout-TSV für die Gruppen-LRP (Sum-Norm,
 #   Abschnitte K–L); jeweils die **ersten** `N_GROUP` Zeilen der jeweiligen TSV.
@@ -66,7 +68,7 @@ from tqdm import tqdm
 # %%
 N_SUBJ_PRED = 3
 IDX_PRED = 1
-N_GROUP = 50
+N_GROUP = 2
 
 PRED_BATCH_SIZE = 8
 SAGITTAL_X = 70
@@ -84,11 +86,11 @@ if int(N_GROUP) < 1:
 # (1) unveränderte MRI
 RUN_DIR_NORMAL = Path(
     "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
-    "training_run_21h19m18s_20aug2026"
+    "/training_run_21h19m18s_20aug2026"
 ).resolve()
 PREDICT_TSV_NORMAL = Path(
     "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
-    "right_whole_thalamus/predict.tsv"
+    "right_whole_thalamus/volume/original_scans/predict.tsv"
 ).resolve()
 MASK_TMPL_NORMAL = (
     "/mnt/ceph2/dl_project/data/mri-scans/not_altered/ukb/recon/"
@@ -102,7 +104,7 @@ RUN_DIR_JITTER = Path(
 ).resolve()
 PREDICT_TSV_JITTER = Path(
     "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
-    "right_whole_thalamus/jittered_data/predict.tsv"
+    "right_whole_thalamus/volume/jittered_data/predict.tsv"
 ).resolve()
 MASK_TMPL_JITTER = (
     "/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon/"
@@ -116,11 +118,25 @@ RUN_DIR_ALL_ZERO = Path(
 ).resolve()
 PREDICT_TSV_ALL_ZERO = Path(
     "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
-    "right_whole_thalamus/all_zero_except_right_thalamus/predict.tsv"
+    "right_whole_thalamus/volume/all_zero_except_right_thalamus/predict.tsv"
 ).resolve()
 MASK_TMPL_ALL_ZERO = (
     "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/ukb/recon/"
     "{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz"
+)
+
+# (4) right thalamus is zero, all other normal
+RUN_DIR_THALAMUS_IS_ZERO = Path(
+    "/mnt/ceph2/dl_project/data/nn-trainings/mri/Right-Whole_thalamus/"
+    "training_run_09h14m02s_28sep2026"
+).resolve()
+PREDICT_TSV_THALAMUS_IS_ZERO = Path(
+    "/mnt/users/andreasre/git-repos/pyment-and1/training_runs/input_files/mri/"
+    "right_whole_thalamus/volume/right_thalamus_is_zero_other_is_normal/predict.tsv"
+).resolve()
+MASK_TMPL_THALAMUS_IS_ZERO = (
+    "/mnt/ceph2/dl_project/data/mri-scans/brain_region_is_zero_other_normal/"
+    "right-thalamus/ukb/recon/{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz"
 )
 
 DATASETS = {
@@ -151,6 +167,16 @@ DATASETS = {
             "{sid}/mri/aseg_mni152_right_thalamus.nii.gz",
             "/mnt/ceph2/dl_project/data/mri-scans/only_brain_regions/right-thalamus/"
             "ukb/recon/{sid}/mri/aseg_mni152_right_thalamus_cropped.nii.gz",
+        ],
+    },
+    "thalamus_is_zero": {
+        "label": "(4) rechter Thalamus = 0, Rest normal",
+        "run_dir": RUN_DIR_THALAMUS_IS_ZERO,
+        "predict_tsv": PREDICT_TSV_THALAMUS_IS_ZERO,
+        "mask_tmpl": MASK_TMPL_THALAMUS_IS_ZERO,
+        "mask_fallbacks": [
+            "/mnt/ceph2/dl_project/data/mri-scans/brain_region_is_zero_other_normal/"
+            "right-thalamus/ukb/recon/{sid}/mri/aseg_mni152_right_thalamus.nii.gz",
         ],
     },
 }
@@ -249,7 +275,7 @@ print("TensorFlow:    ", tf.__version__)
 # %% [markdown]
 # ## D. Labels laden und Subject-Pool festlegen
 #
-# Die drei `predict.tsv` enthalten dieselben Subject-IDs in unterschiedlicher
+# Die vier `predict.tsv` enthalten dieselben Subject-IDs in unterschiedlicher
 # Reihenfolge. Für den Vergleich werden die ersten `N_SUBJ_PRED` IDs aus der
 # **normalen** Holdout-TSV genommen und in den anderen TSVs nachgeschlagen.
 
@@ -307,7 +333,12 @@ print(f"Plot-Subject IDX_PRED={IDX_PRED}: {subject_id_plot}")
 #
 # Pro Dataset-Variante wird das zugehörige `model.keras` geladen. LRP-Composite
 # für SFCN: zwei `flat`-Schichten, vier αβ-Schichten, ε am Dense-Ausgang.
-# Heatmaps bleiben **unnormiert** und werden immer neu berechnet (kein Laden).
+# Heatmaps werden immer neu berechnet (kein Laden gespeicherter NIfTIs).
+#
+# Zusätzlich liest jede Variante `config_training.yaml`. Ist
+# `training.normalisation.use: true` und `z_score` in `types`, werden μ und σ
+# aus `label_normalisation.yaml` für die spätere Rücktransformation geladen.
+#
 
 # %%
 def load_keras_model(run_dir: Path):
@@ -355,24 +386,98 @@ LRP_STRATEGY = LRPStrategy(
         {"alpha": 2, "beta": 1},
         {"epsilon": 0.25},
     ],
-    pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
+    #pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
 )
+
+def zscore_inverse_params(run_dir: Path) -> dict[str, float | bool]:
+    """Read config_training.yaml. Inverse z-score only if normalisation.use is true."""
+    train_cfg = OmegaConf.load(run_dir / "config_training.yaml")
+    norm_cfg = getattr(getattr(train_cfg, "training", None), "normalisation", None)
+    use_flag = bool(norm_cfg is not None and getattr(norm_cfg, "use", False))
+    types = list(getattr(norm_cfg, "types", []) or []) if norm_cfg is not None else []
+    z_on = use_flag and ("z_score" in types)
+    if not z_on:
+        return {"use": False, "mean": 0.0, "std": 1.0}
+    params_path = run_dir / "label_normalisation.yaml"
+    if not params_path.is_file():
+        raise FileNotFoundError(
+            f"normalisation.use=true (z_score), aber {params_path} fehlt."
+        )
+    params = OmegaConf.load(params_path)
+    if str(getattr(params, "type", "")) != "z_score":
+        raise ValueError(f"Unerwarteter Normalisierungstyp in {params_path}: {params}")
+    std = float(params.std)
+    if not np.isfinite(std) or std <= 0.0:
+        raise ValueError(f"Ungültige z-score-Std in {params_path}: {std}")
+    return {"use": True, "mean": float(params.mean), "std": std}
+
+
+def inverse_zscore_values(values, params: dict[str, float | bool]):
+    """Map network outputs from z-space back to the original label scale."""
+    arr = np.asarray(values, dtype=np.float64)
+    if not params["use"]:
+        return arr
+    return arr * float(params["std"]) + float(params["mean"])
+
+
+
+def denorm_lrp_sums(
+    sum_R: float,
+    sum_R_thal: float,
+    sum_R_out: float,
+    params: dict[str, float | bool],
+) -> tuple[float, float, float]:
+    """Map LRP sums to original label scale.
+
+    Heatmaps are already scaled by σ (``R · σ``). The training mean μ is a
+    global prediction offset and is added here for reporting so that
+    ``ΣR + μ ≈ y_pred``. Thal/out get μ proportionally (percentages unchanged).
+    """
+    if not params["use"]:
+        return float(sum_R), float(sum_R_thal), float(sum_R_out)
+    mu = float(params["mean"])
+    s = float(sum_R)
+    if abs(s) > 0.0:
+        return s + mu, float(sum_R_thal) + mu * (float(sum_R_thal) / s), float(sum_R_out) + mu * (float(sum_R_out) / s)
+    return s + mu, float(sum_R_thal), float(sum_R_out)
 
 models: dict[str, object] = {}
 load_volume_fns: dict[str, object] = {}
+zscore_params: dict[str, dict[str, float | bool]] = {}
 for key, meta in DATASETS.items():
     model, cfg, delta = load_keras_model(meta["run_dir"])
     models[key] = model
     load_volume_fns[key] = make_load_volume(cfg)
-    print(f"[{key}] geladen  Δw={delta:.3g}  loader={cfg.data.loader}")
+    zscore_params[key] = zscore_inverse_params(meta["run_dir"])
+    zp = zscore_params[key]
+    print(
+        f"[{key}] geladen  Δw={delta:.3g}  loader={cfg.data.loader}  "
+        f"label={cfg.data.prediction_variable}"
+    )
+    if zp["use"]:
+        print(
+            f"        z-score aktiv (config_training.yaml)  "
+            f"μ={zp['mean']:.6g}  σ={zp['std']:.6g}"
+        )
+    else:
+        print("        keine Label-z-score-Normalisierung")
 
 
 # %% [markdown]
 # ## F. Vorhersagen für `N_SUBJ_PRED` Subjects
 #
 # Jedes Modell prädiziert die Volumes seiner eigenen Datenvariante für denselben
-# Subject-Pool. Anschließend Scatter (3 Panels) mit MAE und Pearson-r sowie eine
-# Tabelle true vs. predicted.
+# Subject-Pool. Die wahren Labels kommen aus der jeweiligen `predict.tsv`
+# (Originalskala).
+#
+# Die Modellausgabe liegt im z-Score-Raum, wenn in `config_training.yaml`
+# `normalisation.use: true` steht. Dann wird jede Vorhersage mit
+# `y = z · σ + μ` auf die Volumenskala zurückgerechnet. Dieselben Werte
+# gehen in Scatter, Tabelle und die 2×4-Figur.
+#
+# Anschließend Scatter (4 Panels) mit MAE und Pearson-r sowie eine Tabelle
+# true vs. predicted.
+#
 
 # %%
 def predict_subjects(dataset_key: str, sids: list[str]) -> pd.DataFrame:
@@ -386,7 +491,10 @@ def predict_subjects(dataset_key: str, sids: list[str]) -> pd.DataFrame:
         if not path.is_file():
             raise FileNotFoundError(f"[{dataset_key}/{sid}] Volume fehlt: {path}")
         vol = load_vol(str(path))
-        y_pred = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
+        y_pred_net = float(np.squeeze(model.predict(np.expand_dims(vol, 0), verbose=0)))
+        y_pred = float(
+            np.squeeze(inverse_zscore_values(y_pred_net, zscore_params[dataset_key]))
+        )
         rows.append(
             {
                 "dataset": dataset_key,
@@ -441,13 +549,14 @@ print("\nTrue- vs. Predicted-Volumen (rechter Thalamus):")
 display(table_df.round(1))
 
 
+
 # %% [markdown]
-# ## G. Scatter-Plot (3 Panels)
+# ## G. Scatter-Plot (4 Panels)
 #
 # Ein Panel je Datenvariante / Modell. Diagonale = ideale Vorhersage.
 
 # %%
-fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2))
+fig, axes = plt.subplots(1, len(DATASETS), figsize=(4.5 * len(DATASETS), 4.2))
 fig.suptitle(
     f"True vs. Predicted  ·  Right-Whole_thalamus  ·  n={N_SUBJ_PRED}",
     fontsize=12,
@@ -516,6 +625,34 @@ def rgba_mask(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
     return out
 
 
+
+def rgba_mask_outline(mask_slc: np.ndarray, rgba: tuple[float, ...]) -> np.ndarray:
+    """Nur die Maskengrenze einfärben; Inneres bleibt transparent (~2 px)."""
+    m = np.asarray(mask_slc, dtype=bool)
+    if not np.any(m):
+        return np.zeros((*m.shape, 4), dtype=np.float32)
+
+    def _shift(arr: np.ndarray, dy: int, dx: int) -> np.ndarray:
+        out = np.zeros_like(arr)
+        y0, y1 = max(0, dy), arr.shape[0] + min(0, dy)
+        x0, x1 = max(0, dx), arr.shape[1] + min(0, dx)
+        out[y0:y1, x0:x1] = arr[y0 - dy : y1 - dy, x0 - dx : x1 - dx]
+        return out
+
+    # Innen erodieren → Grenze; einmal dilatiert für etwas dickere Linie.
+    neigh = [_shift(m, dy, dx) for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1))]
+    eroded = m.copy()
+    for n in neigh:
+        eroded &= n
+    edge = m & ~eroded
+    thick = edge.copy()
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        thick |= _shift(edge, dy, dx)
+    thick &= m  # nur innerhalb der Maske (kein Außenring)
+    out = np.zeros((*m.shape, 4), dtype=np.float32)
+    out[thick] = (rgba[0], rgba[1], rgba[2], 1.0)
+    return out
+
 def sagittal_slc(vol: np.ndarray, cx: int) -> np.ndarray:
     return np.rot90(vol[cx])
 
@@ -558,11 +695,21 @@ cx = int(np.clip(SAGITTAL_X, 0, next(iter(plot_vols.values())).shape[0] - 1))
 print(f"sagittal x = {cx}")
 
 
+
 # %% [markdown]
-# ## I. LRP-Heatmaps neu berechnen (unnormiert)
+# ## I. LRP-Heatmaps neu berechnen
 #
-# Für das ausgewählte Subject werden die drei Heatmaps **immer neu** berechnet
-# (kein Einlesen gespeicherter NIfTIs). Anschließend Dauer aller drei Läufe.
+# Für das ausgewählte Subject werden die vier Heatmaps **immer neu** berechnet
+# (kein Einlesen gespeicherter NIfTIs).
+#
+# War `normalisation.use: true`:
+# - Voxel-Heatmap: `R · σ` (μ nicht voxelweise — globaler Offset).
+# - Ausgegebenen Summen: `ΣR + μ` (Thalamus/Outside anteilig), damit
+#   `ΣR ≈` zurückgerechnete Vorhersage auf der Volumenskala (~7600).
+#
+# Der Thalamus-Anteil `ΣR_Thalamus / ΣR` bleibt unverändert.
+# Anschließend Dauer aller vier Läufe.
+#
 
 # %%
 heatmaps: dict[str, np.ndarray] = {}
@@ -577,34 +724,45 @@ for key in DATASETS:
         strategy=LRP_STRATEGY,
     )
     vol = load_vol(str(plot_paths[key]))
-    R = lrp(np.expand_dims(vol, 0))[0].numpy()
-    heatmaps[key] = np.asarray(R, dtype=np.float32).squeeze()
+    R = np.asarray(lrp(np.expand_dims(vol, 0))[0].numpy(), dtype=np.float64).squeeze()
+    zp = zscore_params[key]
+    if zp["use"]:
+        R = R * float(zp["std"])
+    heatmaps[key] = np.asarray(R, dtype=np.float32)
+    sum_R_raw = float(np.sum(heatmaps[key]))
+    sum_R_disp, _, _ = denorm_lrp_sums(sum_R_raw, 0.0, 0.0, zp)
+    if zp["use"]:
+        scale_note = (
+            f"  · R·σ, ΣR+μ={sum_R_disp:.4g} "
+            f"(μ={float(zp['mean']):.6g}, σ={float(zp['std']):.6g})"
+        )
+    else:
+        scale_note = "  · keine z-score-Skalierung"
     print(
         f"[{key}] LRP fertig  shape={heatmaps[key].shape}  "
         f"|R|_max={float(np.nanmax(np.abs(heatmaps[key]))):.4g}  "
-        f"ΣR={float(np.sum(heatmaps[key])):.4g}"
+        f"ΣR={sum_R_disp:.4g}{scale_note}"
     )
 elapsed_s = time.perf_counter() - t0
 print(
-    f"\nDauer Berechnung aller 3 Heatmaps: {elapsed_s:.2f} s "
+    f"\nDauer Berechnung aller {len(DATASETS)} Heatmaps: {elapsed_s:.2f} s "
     f"({elapsed_s / 60.0:.2f} min)"
 )
 
 
+
 # %% [markdown]
-# ## J. Figur 2×3: Inputs (oben) + LRP-Heatmaps (unten)
+# ## J. Figur 2×4: Inputs (oben) + LRP-Heatmaps (unten)
 #
-# - Obere Reihe: Input-Intensität, sagittal `x=70`, rechte Thalamus-Maske in Grün
-#   (`alpha=0.5`), eigene Colorbar je Panel.
-# - Untere Reihe: unnormierte LRP-Relevanzen, Colorbar je Panel mit
-#   `vmin/vmax = ±P99.5(|R|)` (wie Abschnitt M) — Spitzen werden gekappt, die
-#   Karten sind zwischen den Varianten besser vergleichbar. `|R|_max` bleibt
-#   im Titel als echte Peak-Größe.
-# - In jedem Panel: Subject-ID, wahres und prädiziertes Volumen.
+# - Obere Reihe: Input-Intensität, sagittal `x=70`, rechte Thalamus-**Umrandung**
+#   in Grün (Innen transparent), eigene Colorbar je Panel.
+# - Untere Reihe: LRP-Relevanzen (bei aktivem z-Score voxelweise `R · σ`),
+#   Colorbar je Panel mit `vmin/vmax = ±P99.5(|R|)`.
+# - Titel-Summen bei z-Score: `ΣR + μ` bzw. Thalamus/Outside **anteilig mit μ**,
+#   damit `ΣR ≈` Pred auf Originalskala. Prozente unverändert.
+# - In jedem Panel: Subject-ID, wahres Volumen und zurückgerechnete Vorhersage.
 #
-# **Anteil im / außerhalb des rechten Thalamus** (unnormiertes LRP;
-# Gesamtrelevanz $\sum_i R_i \approx$ vorhergesagtes Volumen wegen Relevanzerhaltung).
-# Außerhalb: Summe über alle Voxel **nicht** in der rechten Thalamus-Maske:
+# **Anteil im / außerhalb des rechten Thalamus**
 #
 # $$
 # \%R_{\mathrm{Thal}}
@@ -615,9 +773,10 @@ print(
 # = 100 \cdot
 # \frac{\sum_{i \notin \mathrm{Thalamus}} R_i}{\sum_i R_i}
 # $$
+#
 
 # %%
-fig, axes = plt.subplots(2, 3, figsize=(14.5, 9.6))
+fig, axes = plt.subplots(2, len(DATASETS), figsize=(4.8 * len(DATASETS), 9.6))
 fig.suptitle(
     (
         f"Subject {subject_id_plot}  ·  IDX_PRED={IDX_PRED}/{N_SUBJ_PRED}  ·  "
@@ -629,7 +788,7 @@ fig.suptitle(
         r"\%R_{\mathrm{out}}="
         r"100\cdot"
         r"(\sum_{i\notin\mathrm{Thal}} R_i)/(\sum_i R_i)$"
-        r"$\quad(\sum_i R_i\approx$ Pred.-Volumen, unnormiert$)$"
+        r"$\quad(\sum_i R_i{+}\mu\approx$ Pred.-Volumen bei z-Score)$"
     ),
     fontsize=11,
 )
@@ -644,7 +803,9 @@ for col, key in enumerate(keys):
     vmax_i = float(np.percentile(pos, 99.5)) if pos.size else 1.0
     r_slc = sagittal_slc(right.astype(np.float32), cx) > 0
     im = ax.imshow(sagittal_slc(vol, cx), cmap="gray", vmin=0.0, vmax=vmax_i)
-    ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
+    # Obere Reihe: nur grüne Thalamus-Umrandung (Innen transparent).
+    # Untere LRP-Reihe behält die gefüllte Maske unverändert.
+    ax.imshow(rgba_mask_outline(r_slc, COLOR_RIGHT), interpolation="nearest")
     ax.set_title(
         f"{DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
@@ -659,16 +820,20 @@ for col, key in enumerate(keys):
     ax = axes[1, col]
     heat = heatmaps[key]
     right = plot_right[key]
-    sum_R = float(np.sum(heat))
-    sum_R_thal = float(np.sum(heat[right]))
+    sum_R_raw = float(np.sum(heat))
+    sum_R_thal_raw = float(np.sum(heat[right]))
     # Explizit: alle Relevanzen außerhalb der rechten Thalamus-Maske aufaddieren
-    sum_R_out = float(np.sum(heat[~right]))
-    if abs(sum_R) > 0:
-        pct_thal = 100.0 * sum_R_thal / sum_R
-        pct_out = 100.0 * sum_R_out / sum_R
+    sum_R_out_raw = float(np.sum(heat[~right]))
+    if abs(sum_R_raw) > 0:
+        pct_thal = 100.0 * sum_R_thal_raw / sum_R_raw
+        pct_out = 100.0 * sum_R_out_raw / sum_R_raw
     else:
         pct_thal = float("nan")
         pct_out = float("nan")
+    # Berichtssummen auf Originalskala (bei z-Score: +μ, anteilig für Thal/Out)
+    sum_R, sum_R_thal, sum_R_out = denorm_lrp_sums(
+        sum_R_raw, sum_R_thal_raw, sum_R_out_raw, zscore_params[key]
+    )
     abs_max = float(np.nanmax(np.abs(heat))) or 1.0
     # Wie Abschnitt M: robuste Skala über Perzentil, nicht Peak (sonst wirkt
     # „unverändert“ flau und „gejittert“ übersteuert).
@@ -682,7 +847,7 @@ for col, key in enumerate(keys):
     )
     ax.imshow(rgba_mask(r_slc, COLOR_RIGHT), interpolation="nearest")
     ax.set_title(
-        f"LRP unnormiert · {DATASETS[key]['label']}\n"
+        f"LRP · {DATASETS[key]['label']}\n"
         f"{subject_id_plot}\n"
         f"true={plot_true[key]:.0f}  pred={plot_pred[key]:.0f}  "
         f"|R|_max={abs_max:.3g}\n"
@@ -708,7 +873,7 @@ for col, im in enumerate(im_lrps):
     cbar.set_label("LRP relevance")
 
 fig.legend(
-    handles=[Patch(facecolor=COLOR_RIGHT, edgecolor="none", label="rechter Thalamus")],
+    handles=[Patch(facecolor=COLOR_RIGHT, edgecolor="none", label="rechter Thalamus (oben: Umrandung, unten: Füllung)")],
     loc="lower center",
     ncol=1,
     frameon=False,
@@ -721,7 +886,7 @@ if SHOW_PLOTS_INLINE:
 plt.close(fig)
 
 print(
-    f"Heatmap-Berechnung (Abschnitt I): {elapsed_s:.2f} s für alle 3 Modelle "
+    f"Heatmap-Berechnung (Abschnitt I): {elapsed_s:.2f} s für alle {len(DATASETS)} Modelle "
     f"(Subject {subject_id_plot})."
 )
 
@@ -858,13 +1023,13 @@ for key in DATASETS:
 
 elapsed_group_s = time.perf_counter() - t0_group
 print(
-    f"\nDauer Gruppen-LRP (3× N_GROUP={N_GROUP}): "
+    f"\nDauer Gruppen-LRP ({len(DATASETS)}× N_GROUP={N_GROUP}): "
     f"{elapsed_group_s:.1f} s ({elapsed_group_s / 60.0:.2f} min)"
 )
 
 
 # %% [markdown]
-# ## L. Figur: drei Gruppen-LRP-Karten
+# ## L. Figur: vier Gruppen-LRP-Karten
 #
 # Ein Panel je Datenvariante, sagittal `x=70`. Overlay der binären Gruppen-Thalamus-
 # Maske in Grün (`alpha=0.5`). Eigene Colorbar je Panel (Werte ≥ 0 wegen Sum-Norm).
@@ -878,7 +1043,7 @@ print(
 # $$
 
 # %%
-fig, axes = plt.subplots(1, 3, figsize=(14.5, 5.4))
+fig, axes = plt.subplots(1, len(DATASETS), figsize=(4.8 * len(DATASETS), 5.4))
 fig.suptitle(
     (
         f"Gruppen-LRP (Sum-Norm)  ·  $N_{{\\mathrm{{GROUP}}}}={N_GROUP}$"
@@ -1096,7 +1261,7 @@ else:
 # Figur: Zeile 0 = CPU, Zeile 1 = GPU (falls vorhanden)
 n_rows = len(devices_to_run)
 fig, axes = plt.subplots(
-    n_rows, 3, figsize=(14.5, 4.2 * n_rows), squeeze=False
+    n_rows, len(DATASETS), figsize=(4.8 * len(DATASETS), 4.2 * n_rows), squeeze=False
 )
 fig.suptitle(
     (
@@ -1142,7 +1307,6 @@ print(
     "  4) Wenn beide wild → Strategie/ε bzw. Division R/z prüfen, nicht nur Device."
 )
 
-
 # %% [markdown]
 # ## N. Folgeanalysen zur CPU/GPU-LRP-Diskrepanz
 #
@@ -1158,6 +1322,7 @@ print(
 # | **N.5** | Nur Forward `model(x)` CPU vs. GPU? | fast gleich → Bug im LRP-Backward |
 # | **N.6** | Zwischen-Aktivierungen (Conv)? | winzige Δ → LRP verstärkt sie |
 # | **N.7** | Praxis | LRP-Plots auf GPU; CPU als instabil dokumentieren |
+#
 
 # %%
 from tensorflow.keras import Model as KerasModel
@@ -1509,7 +1674,7 @@ LRP_STRATEGY_EPS_LARGE = LRPStrategy(
         {"alpha": 2, "beta": 1},
         {"epsilon": EPS_LARGE},
     ],
-    pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
+    #pooling=[{"strategy": "flat"}] * N_POOLING_LAYERS,
 )
 
 rows_n4: list[dict[str, object]] = []
@@ -1561,7 +1726,7 @@ display(df_n4)
 
 # 2×3: CPU base vs CPU ε-large (Instabilität sichtbar?)
 if "CPU" in heatmaps_eps:
-    fig, axes = plt.subplots(2, 3, figsize=(14.5, 8.0))
+    fig, axes = plt.subplots(2, len(DATASETS), figsize=(4.8 * len(DATASETS), 8.0))
     fig.suptitle(
         f"N.4  CPU: Basis-ε vs. ε={EPS_LARGE}  ·  Subject {subject_id_plot}\n"
         "Wenn CPU mit großem ε der GPU ähnlicher wird → Nenner-Problem",
@@ -1739,3 +1904,61 @@ print(
     "\nAbschnitt N fertig. Objekte: df_n1 … df_n4, layerwise, heatmaps_eps, "
     "rows_n5, rows_n6."
 )
+
+
+# %% [markdown]
+# # calc intensity of right thalamus for a single subject
+
+# %%
+from pathlib import Path
+import subprocess
+import numpy as np
+import nibabel as nib
+from IPython.display import display
+import pandas as pd
+
+OUT = Path("/mnt/users/andreasre/tmp_stuff/intensity_tests")
+IMG = Path("/mnt/ceph/data/ukb/recon/1756187_20252_2_0/mri/cropped.nii.gz")
+MASK = Path(
+    "/mnt/ceph2/dl_project/data/mri-scans/jittered_data/ukb/recon/"
+    "1756187_20252_2_0/mri/aseg_mni152_right_thalamus_cropped.nii.gz"
+)
+MASK_BIN = OUT / "mask_right_thalamus_bin.nii.gz"
+OUT.mkdir(parents=True, exist_ok=True)
+
+# --- Option A: fslstats (wie Bash) ---
+subprocess.run(
+    ["bash", "-lc", f"""
+      export FSLDIR=/usr/local/fsl
+      source $FSLDIR/etc/fslconf/fsl.sh
+      fslmaths '{MASK}' -bin '{MASK_BIN.with_suffix("")}'
+    """],
+    check=True,
+)
+
+def fslstats(*args) -> str:
+    cmd = f"""
+      export FSLDIR=/usr/local/fsl
+      source $FSLDIR/etc/fslconf/fsl.sh
+      fslstats {' '.join(str(a) for a in args)}
+    """
+    return subprocess.check_output(["bash", "-lc", cmd], text=True).strip()
+
+mean = float(fslstats(IMG, "-k", MASK_BIN, "-m"))
+nvox, vol_mm3 = map(float, fslstats(IMG, "-k", MASK_BIN, "-V").split())
+sum_int = mean * nvox
+
+# --- Option B: nibabel (Kontrolle) ---
+I = np.asarray(nib.load(IMG).get_fdata(), dtype=np.float64)
+M = np.asarray(nib.load(MASK).get_fdata()) > 0
+sum_py = float(I[M].sum())
+mean_py = float(I[M].mean())
+
+df = pd.DataFrame(
+    [
+        {"method": "fslstats", "n_voxels": int(nvox), "mean": mean, "sum": sum_int},
+        {"method": "nibabel", "n_voxels": int(M.sum()), "mean": mean_py, "sum": sum_py},
+    ]
+)
+display(df)
+print(df.to_string(index=False))
