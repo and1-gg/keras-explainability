@@ -390,7 +390,7 @@ def make_load_volume(cfg):
 
     return _load
 
-LRP_STRATEGY = LRPStrategy(
+LRP_STRATEGY_a2b1 = LRPStrategy(
     layers=[
         {"flat": True},
         {"flat": True},
@@ -402,8 +402,7 @@ LRP_STRATEGY = LRPStrategy(
     ],
 )
 
-"""
-LRP_STRATEGY = LRPStrategy(
+LRP_STRATEGY_a1b0 = LRPStrategy(
     layers=[
         {"flat": True},
         {"flat": True},
@@ -414,7 +413,9 @@ LRP_STRATEGY = LRPStrategy(
         {"epsilon": 0.25},
     ],
 )
-"""
+
+#LRP_STRATEGY = LRP_STRATEGY_a2b1
+LRP_STRATEGY = LRP_STRATEGY_a1b0
 
 def zscore_inverse_params(run_dir: Path) -> dict[str, float | bool]:
     """Read config_training.yaml. Inverse z-score only if normalisation.use is true."""
