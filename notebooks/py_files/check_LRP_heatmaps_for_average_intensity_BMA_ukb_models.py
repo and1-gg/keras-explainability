@@ -25,7 +25,8 @@
 # (`nu_mni152_flirt.nii.gz`, kein `cropped.nii.gz`). Ablauf: Vorhersagen für `N_SUBJ_PRED`
 # Holdout-Subjects → Scatter mit MAE und Pearson-r → Tabelle wahr vs.
 # prädiziert → für Subject `IDX_PRED` sagittale Inputs (`x=70`) und zwei
-# unnormierte LRP-Heatmaps, die bei jedem Lauf neu berechnet werden.
+# unnormierte LRP-Heatmaps, die bei jedem Lauf neu berechnet werden →
+# Gruppen-LRP über `N_group` zufällig gewählte Holdout-Subjects (Sum-Norm).
 # Vorhersagen und Heatmaps werden bei aktivem z-Score aus
 # `config_training.yaml` zurücktransformiert.
 #
@@ -52,6 +53,8 @@ import tensorflow as tf
 from IPython.display import display
 from omegaconf import OmegaConf, open_dict
 from scipy.stats import pearsonr
+from tqdm import tqdm
+
 
 
 # %% [markdown]
@@ -62,11 +65,16 @@ from scipy.stats import pearsonr
 #   Holdout-`predict.tsv`.
 # - `IDX_PRED`: Index des Subjects für die 2×2-Figur. Muss
 #   `0 <= IDX_PRED < N_SUBJ_PRED` erfüllen, sonst Fehler.
+# - `N_group`: Anzahl zufällig gewählter Holdout-Subjects für die Gruppen-LRP
+#   (Sum-Norm, Abschnitte L–M); Ziehung aus der gemeinsamen `predict.tsv`
+#   mit Seed `GROUP_SEED`.
 #
 
 # %%
 N_SUBJ_PRED = 3
 IDX_PRED = 1
+N_group = 100
+GROUP_SEED = 42
 
 PRED_BATCH_SIZE = 8
 SAGITTAL_X = 70
@@ -87,19 +95,21 @@ if not (0 <= int(IDX_PRED) < int(N_SUBJ_PRED)):
         f"IDX_PRED={IDX_PRED} muss kleiner als N_SUBJ_PRED={N_SUBJ_PRED} sein "
         f"(gültig: 0 .. {N_SUBJ_PRED - 1})."
     )
+if int(N_group) < 1:
+    raise ValueError(f"N_group muss >= 1 sein, got {N_group}.")
 
 # (1) BMA avg-intensity (inkl. MD-Outlier)
 RUN_DIR_BMA = Path(
     "/mnt/ceph2/dl_project/data/nn-trainings/mri/"
     "average-intensity_bone-marrow-adiposity/"
-    "training_run_17h39m49s_07oct2026"
+    "training_run_17h58m06s_07oct2026"
 ).resolve()
 
 # (2) BMA avg-intensity ohne MD-Outlier
 RUN_DIR_BMA_EXCL = Path(
     "/mnt/ceph2/dl_project/data/nn-trainings/mri/"
     "average-intensity_bone-marrow-adiposity_exclMDoutliers/"
-    "training_run_17h49m28s_07oct2026"
+    "training_run_18h13m39s_07oct2026"
 ).resolve()
 
 DATASETS = {
@@ -135,11 +145,14 @@ if not TRAIN_TSV.is_file():
 
 print(f"N_SUBJ_PRED = {N_SUBJ_PRED}")
 print(f"IDX_PRED    = {IDX_PRED}")
+print(f"N_group     = {N_group}")
+print(f"GROUP_SEED  = {GROUP_SEED}")
 print(f"TRAIN_TSV   = {TRAIN_TSV}")
 print(f"PREDICT_TSV = {PREDICT_TSV}")
 for key, meta in DATASETS.items():
     print(f"[{key}] run={meta['run_dir'].name}")
     print(f"        pred_var={meta['pred_var']}")
+
 
 
 # %% [markdown]
@@ -382,8 +395,8 @@ LRP_STRATEGY_a1b0 = LRPStrategy(
     ],
 )
 
-# LRP_STRATEGY = LRP_STRATEGY_a2b1
-LRP_STRATEGY = LRP_STRATEGY_a1b0
+LRP_STRATEGY = LRP_STRATEGY_a2b1
+#LRP_STRATEGY = LRP_STRATEGY_a1b0
 
 
 def zscore_inverse_params(run_dir: Path) -> dict[str, float | bool]:
@@ -808,3 +821,247 @@ print(
     f"Heatmap-Berechnung (Abschnitt J): {elapsed_s:.2f} s für alle {len(DATASETS)} Modelle "
     f"(Subject {subject_id_plot})."
 )
+
+
+# %% [markdown]
+# ## L. Gruppen-LRP für `N_group` Subjects (Sum-Norm)
+#
+# Zufällige Ziehung von **`N_group` Subjects** aus der gemeinsamen Holdout-
+# `predict.tsv` (Seed `GROUP_SEED`). Dieselbe Subject-Liste gilt für beide
+# BMA-Modelle.
+#
+# **Gruppen-MRI:** voxelweiser Mittelwert der vollen `nu_mni152_flirt`-Volumes
+# über die `N_group` Subjects (identisch für beide Modelle).
+#
+# Für jedes Subject $s$:
+#
+# $$
+# R^{(s)}_{\mathrm{norm},i}
+# = \frac{\bigl|R^{(s)}_i\bigr|}{\sum_j \bigl|R^{(s)}_j\bigr|}
+# \qquad\Rightarrow\qquad
+# \sum_i R^{(s)}_{\mathrm{norm},i} = 1
+# $$
+#
+# Gruppenheatmap:
+#
+# $$
+# H = \sum_{s=1}^{N_{\mathrm{group}}} R^{(s)}_{\mathrm{norm}}
+# $$
+#
+# Die Sum-Norm macht eine etwaige Label-z-Score-Skalierung ($R \cdot \sigma$)
+# irrelevant. Accumuliert wird im Crop-Raum des Netzes; für die Figur wird $H$
+# in das volle `nu_mni152_flirt`-Gitter zurückgeschrieben.
+#
+
+# %%
+def normalize_lrp_sum_abs(R: np.ndarray) -> np.ndarray:
+    """R_norm_i = |R_i| / sum(|R|); Summe über Voxel = 1."""
+    abs_r = np.abs(np.asarray(R, dtype=np.float64))
+    denom = float(np.sum(abs_r))
+    if denom <= 0.0:
+        raise RuntimeError("LRP-Summe |R| ist 0 — Normierung nicht möglich.")
+    return (abs_r / denom).astype(np.float64)
+
+
+# Zufällige Subject-Auswahl aus der gemeinsamen predict.tsv
+_first_key_group = next(iter(DATASETS))
+df_pool = labels_full[_first_key_group]
+if len(df_pool) < int(N_group):
+    raise RuntimeError(
+        f"predict.tsv hat nur {len(df_pool)} Zeilen, N_group={N_group}."
+    )
+df_group = df_pool.sample(n=int(N_group), random_state=int(GROUP_SEED)).reset_index(
+    drop=True
+)
+group_subject_ids = df_group["participant_id"].astype(str).tolist()
+print(
+    f"Gruppen-Subjects: N_group={N_group}, seed={GROUP_SEED}, "
+    f"erste IDs={group_subject_ids[:5]}"
+)
+
+group_heatmaps: dict[str, np.ndarray] = {}
+group_heatmaps_full: dict[str, np.ndarray] = {}
+group_meta: dict[str, dict[str, object]] = {}
+
+# Referenz-Shape + Gruppen-MRI (Mittelwert der vollen Volumes)
+_ref_sid = group_subject_ids[0]
+_ref_full = load_full_nifti(Path(INPUT_TMPL.format(sid=_ref_sid)))
+_ref_full_shape = _ref_full.shape
+
+t0_group = time.perf_counter()
+vol_acc = np.zeros(_ref_full_shape, dtype=np.float64)
+for sid in tqdm(group_subject_ids, desc="group-MRI"):
+    vol_path = Path(INPUT_TMPL.format(sid=sid))
+    if not vol_path.is_file():
+        raise FileNotFoundError(f"[group-MRI/{sid}] Volume fehlt: {vol_path}")
+    vol_full = load_full_nifti(vol_path)
+    if vol_full.shape != _ref_full_shape:
+        raise ValueError(
+            f"[group-MRI/{sid}] Shape {vol_full.shape} ≠ {_ref_full_shape}"
+        )
+    vol_acc += vol_full.astype(np.float64)
+
+group_mri_mean = (vol_acc / float(len(group_subject_ids))).astype(np.float32)
+print(
+    f"Gruppen-MRI: mean über n={len(group_subject_ids)}  "
+    f"shape={group_mri_mean.shape}  "
+    f"max={float(np.max(group_mri_mean)):.4g}"
+)
+
+for key in DATASETS:
+    model = models[key]
+    load_vol = load_volume_fns[key]
+    lrp = LRP(
+        model,
+        layer=len(model.layers) - 1,
+        idx=0,
+        strategy=LRP_STRATEGY,
+    )
+
+    heat_acc: np.ndarray | None = None
+    n_ok = 0
+    first_sids: list[str] = []
+
+    for sid in tqdm(group_subject_ids, desc=f"group-LRP [{key}]"):
+        vol_path = Path(INPUT_TMPL.format(sid=sid))
+        if not vol_path.is_file():
+            raise FileNotFoundError(f"[{key}/{sid}] Volume fehlt: {vol_path}")
+
+        vol = load_vol(str(vol_path))
+        R = lrp(np.expand_dims(vol, 0))[0].numpy()
+        R_norm = normalize_lrp_sum_abs(R)
+
+        if heat_acc is None:
+            heat_acc = np.zeros_like(R_norm, dtype=np.float64)
+        if R_norm.shape != heat_acc.shape:
+            raise ValueError(
+                f"[{key}/{sid}] Heatmap-Shape {R_norm.shape} ≠ {heat_acc.shape}"
+            )
+
+        heat_acc += R_norm
+        n_ok += 1
+        if len(first_sids) < 3:
+            first_sids.append(sid)
+
+    assert heat_acc is not None
+    sum_H = float(np.sum(heat_acc))
+    max_H = float(np.max(heat_acc))
+
+    group_heatmaps[key] = heat_acc.astype(np.float32)
+    group_heatmaps_full[key] = pad_crop_to_full(
+        group_heatmaps[key], _ref_full_shape, crop_cfgs[key]
+    )
+    group_meta[key] = {
+        "n": n_ok,
+        "sum_H": sum_H,
+        "max_H": max_H,
+        "first_sids": first_sids,
+        "subject_ids": group_subject_ids,
+    }
+    print(
+        f"[{key}] n={n_ok}  ΣH={sum_H:.4g} (≈ N_group={N_group})  "
+        f"max(H)={max_H:.4g}  cropped={group_heatmaps[key].shape}  "
+        f"full={group_heatmaps_full[key].shape}  erste IDs={first_sids}"
+    )
+
+elapsed_group_s = time.perf_counter() - t0_group
+print(
+    f"\nDauer Gruppen-MRI + LRP ({len(DATASETS)}× N_group={N_group}): "
+    f"{elapsed_group_s:.1f} s ({elapsed_group_s / 60.0:.2f} min)"
+)
+
+
+# %% [markdown]
+# ## M. Figur 2×2: Gruppen-MRI (oben) + Gruppen-LRP (unten)
+#
+# Zwei Spalten, eine je BMA-Label **(1)** / **(2)**. Beide Reihen nutzen das
+# volle `nu_mni152_flirt`-FOV.
+#
+# - Obere Reihe: Gruppen-MRI (voxelweiser Mittelwert über `N_group` Subjects),
+#   sagittal `x=70`, eigene Colorbar je Panel.
+# - Untere Reihe: Gruppen-LRP (Sum-Norm), Werte ≥ 0, eigene Colorbar je Panel.
+#
+# $$
+# H = \sum_{s=1}^{N_{\mathrm{group}}} R^{(s)}_{\mathrm{norm}}
+# \qquad\text{mit}\qquad
+# \sum_i R^{(s)}_{\mathrm{norm},i} = 1
+# $$
+#
+
+# %%
+n_cols = len(DATASETS)
+fig, axes = plt.subplots(2, n_cols, figsize=(5.2 * n_cols, 9.6))
+if n_cols == 1:
+    axes = np.asarray(axes).reshape(2, 1)
+fig.suptitle(
+    (
+        f"Gruppen-MRI + LRP (Sum-Norm)  ·  $N_{{\mathrm{{group}}}}={N_group}$"
+        f"  ·  seed={GROUP_SEED}  ·  sagittal $x={SAGITTAL_X}$\n"
+        + r"$R^{(s)}_{\mathrm{norm},i}=\dfrac{|R^{(s)}_i|}{\sum_j |R^{(s)}_j|}"
+        r"\;\Rightarrow\;"
+        r"\sum_i R^{(s)}_{\mathrm{norm},i}=1$"
+        "\n"
+        r"$H=\sum_{s=1}^{N_{\mathrm{group}}} R^{(s)}_{\mathrm{norm}}$"
+    ),
+    fontsize=11,
+)
+
+keys = list(DATASETS.keys())
+cx_g = int(np.clip(SAGITTAL_X, 0, group_mri_mean.shape[0] - 1))
+pos = group_mri_mean[group_mri_mean > 0]
+vmax_i = float(np.percentile(pos, 99.5)) if pos.size else 1.0
+
+im_vols = []
+for col, key in enumerate(keys):
+    ax = axes[0, col]
+    im = ax.imshow(
+        sagittal_slc(group_mri_mean, cx_g),
+        cmap="gray",
+        vmin=0.0,
+        vmax=vmax_i,
+    )
+    ax.set_title(
+        f"{DATASETS[key]['label']}\n"
+        f"Gruppen-MRI (mean, n={N_group})",
+        fontsize=10,
+    )
+    ax.axis("off")
+    im_vols.append(im)
+
+im_groups = []
+for col, key in enumerate(keys):
+    ax = axes[1, col]
+    H = group_heatmaps_full[key]
+    vmax_h = float(np.nanmax(H)) or 1.0
+    im = ax.imshow(
+        sagittal_slc(H, cx_g),
+        cmap="hot",
+        vmin=0.0,
+        vmax=vmax_h,
+    )
+    meta = group_meta[key]
+    ax.set_title(
+        f"Gruppen-LRP · {DATASETS[key]['label']}\n"
+        f"n={meta['n']}  ΣH={meta['sum_H']:.2f}  max={meta['max_H']:.3g}",
+        fontsize=10,
+    )
+    ax.axis("off")
+    im_groups.append(im)
+
+for col, im in enumerate(im_vols):
+    cbar = fig.colorbar(im, ax=axes[0, col], fraction=0.046, pad=0.04)
+    cbar.set_label("Intensität (mean)")
+for col, im in enumerate(im_groups):
+    cbar = fig.colorbar(im, ax=axes[1, col], fraction=0.046, pad=0.04)
+    cbar.set_label(r"$\sum_s R^{(s)}_{\mathrm{norm}}$")
+
+fig.tight_layout(rect=[0, 0.02, 1, 0.88])
+
+if SHOW_PLOTS_INLINE:
+    display(fig)
+plt.close(fig)
+
+print(
+    f"Gruppenfigur fertig (N_group={N_group}, Berechnung {elapsed_group_s:.1f} s)."
+)
+
