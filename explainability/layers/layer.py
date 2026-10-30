@@ -26,7 +26,12 @@ class StandardLRPLayer(LRPLayer, ABC):
     def __init__(self, layer: tf.Tensor, *, epsilon: float = None,
                  gamma: float = None, alpha: float = None, beta: float = None,
                  b: bool = False, flat: bool = False, ignore_bias: bool = False,
-                 adjust_epsilon: bool = False, name: str = 'dense_lrp'):
+                 adjust_epsilon: bool = False, reference_shift=None,
+                 name: str = 'dense_lrp'):
+        """``reference_shift`` is a ``ReferenceShift`` layer (reference-value
+        LRP). If given, ``call`` expects a third input, the pre-activations of
+        ``layer``, from which the sample dependent bias offsets are derived
+        and added to the layer bias."""
         super().__init__(layer, name=name)
 
         if epsilon is not None:
@@ -55,18 +60,26 @@ class StandardLRPLayer(LRPLayer, ABC):
         self.flat = flat
         self.ignore_bias = ignore_bias
         self.adjust_epsilon = adjust_epsilon
+        self.reference_shift = reference_shift
 
     def compute_output_shape(self, input_shape):
         return self.layer.input.shape
 
     def call(self, inputs: List[tf.Tensor]) -> tf.Tensor:
-        a, R = inputs
+        if self.reference_shift is not None:
+            a, R, z_pre = inputs
+        else:
+            a, R = inputs
         R_in = R
 
         if self.b:
             a = tf.ones_like(a)
 
         bias, w = self.get_weights(a)
+
+        if self.reference_shift is not None:
+            shift = self.reference_shift.compute_shift(z_pre)
+            bias = shift if bias is None else bias + shift
 
         if self.flat:
             a = tf.ones_like(a)
