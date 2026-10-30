@@ -64,6 +64,7 @@ from scipy.stats import pearsonr
 #   nachgeschlagen.
 # - `IDX_PRED`: Index des Subjects für die 2×4-Figur. Muss
 #   `0 <= IDX_PRED < N_SUBJ_PRED` erfüllen, sonst Fehler.
+# - `PLOT_LANG`: Plot-Beschriftungen `"de"` (Deutsch) oder `"en"` (Englisch).
 #
 
 # %%
@@ -75,6 +76,40 @@ SAGITTAL_X = 70
 SHOW_PLOTS_INLINE = True
 COLOR_RIGHT = (0.15, 0.65, 0.25, 0.50)  # grün, alpha=0.5
 PRED_VAR = "average-intensity_right-whole-thalamus"
+PLOT_LANG = "de"  # "de" | "en"
+
+PLOT_LABELS = {
+    "de": {
+        "scatter_suptitle": "Wahr vs. prädiziert  ·  {pred_var}  ·  n={n}",
+        "xlabel_true": "wahre Intensität",
+        "ylabel_pred": "prädizierte Intensität",
+        "true_abbr": "wahr",
+        "pred_abbr": "präd",
+        "thal_pct": "Thalamus = {pct:.1f}% der Gesamtrelevanz",
+        "cbar_intensity": "Intensität",
+        "cbar_lrp": "LRP-Relevanz",
+        "legend_right_thal": "rechter Thalamus",
+    },
+    "en": {
+        "scatter_suptitle": "True vs. predicted  ·  {pred_var}  ·  n={n}",
+        "xlabel_true": "true intensity",
+        "ylabel_pred": "predicted intensity",
+        "true_abbr": "true",
+        "pred_abbr": "pred",
+        "thal_pct": "Thalamus = {pct:.1f}% of total relevance",
+        "cbar_intensity": "Intensity",
+        "cbar_lrp": "LRP relevance",
+        "legend_right_thal": "right thalamus",
+    },
+}
+if PLOT_LANG not in PLOT_LABELS:
+    raise ValueError(f"PLOT_LANG={PLOT_LANG!r} ungültig (erlaubt: {sorted(PLOT_LABELS)})")
+PL = PLOT_LABELS[PLOT_LANG]
+
+
+def dataset_label(key: str) -> str:
+    return DATASETS[key]["label"][PLOT_LANG]
+
 
 if not (0 <= int(IDX_PRED) < int(N_SUBJ_PRED)):
     raise ValueError(
@@ -145,7 +180,7 @@ MASK_TMPL_THALAMUS_IS_ZERO = (
 
 DATASETS = {
     "normal": {
-        "label": "(1) unverändert",
+        "label": {"de": "(1) unverändert", "en": "(1) unaltered"},
         "run_dir": RUN_DIR_NORMAL,
         "predict_tsv": PREDICT_TSV_NORMAL,
         "mask_tmpl": MASK_TMPL_NORMAL,
@@ -157,14 +192,17 @@ DATASETS = {
         ],
     },
     "jittered": {
-        "label": "(2) gejittert",
+        "label": {"de": "(2) gejittert", "en": "(2) jittered"},
         "run_dir": RUN_DIR_JITTER,
         "predict_tsv": PREDICT_TSV_JITTER,
         "mask_tmpl": MASK_TMPL_JITTER,
         "mask_fallbacks": [],
     },
     "all_zero": {
-        "label": "(3) all-zero außer rechtem Thalamus",
+        "label": {
+            "de": "(3) all-zero außer rechtem Thalamus",
+            "en": "(3) all-zero except right thalamus",
+        },
         "run_dir": RUN_DIR_ALL_ZERO,
         "predict_tsv": PREDICT_TSV_ALL_ZERO,
         "mask_tmpl": MASK_TMPL_ALL_ZERO,
@@ -176,7 +214,10 @@ DATASETS = {
         ],
     },
     "thalamus_is_zero": {
-        "label": "(4) rechter Thalamus = 0, Rest normal",
+        "label": {
+            "de": "(4) rechter Thalamus = 0, Rest normal",
+            "en": "(4) right thalamus = 0, rest normal",
+        },
         "run_dir": RUN_DIR_THALAMUS_IS_ZERO,
         "predict_tsv": PREDICT_TSV_THALAMUS_IS_ZERO,
         "mask_tmpl": MASK_TMPL_THALAMUS_IS_ZERO,
@@ -201,6 +242,7 @@ for key, meta in DATASETS.items():
 print(f"N_SUBJ_PRED = {N_SUBJ_PRED}")
 print(f"IDX_PRED    = {IDX_PRED}")
 print(f"PRED_VAR    = {PRED_VAR}")
+print(f"PLOT_LANG   = {PLOT_LANG}")
 for key, meta in DATASETS.items():
     print(f"[{key}] run={meta['run_dir'].name}")
     print(f"        tsv={meta['predict_tsv']}")
@@ -522,7 +564,7 @@ for key, df in preds_by_dataset.items():
     metrics_rows.append(
         {
             "dataset": key,
-            "label": DATASETS[key]["label"],
+            "label": dataset_label(key),
             "n": len(df),
             "MAE": mae,
             "pearson_r": r_val,
@@ -544,7 +586,7 @@ metrics_df = pd.DataFrame(metrics_rows)
 # %%
 fig, axes = plt.subplots(1, len(DATASETS), figsize=(4.5 * len(DATASETS), 4.2))
 fig.suptitle(
-    f"Wahr vs. prädiziert  ·  {PRED_VAR}  ·  n={N_SUBJ_PRED}",
+    PL["scatter_suptitle"].format(pred_var=PRED_VAR, n=N_SUBJ_PRED),
     fontsize=12,
 )
 
@@ -559,9 +601,9 @@ for ax, key in zip(axes, DATASETS):
     hi = float(max(y_true.max(), y_pred.max()))
     pad = 0.05 * (hi - lo + 1e-6)
     ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "k--", lw=1)
-    ax.set_xlabel("wahre Intensität")
-    ax.set_ylabel("prädizierte Intensität")
-    ax.set_title(f"{DATASETS[key]['label']}\nMAE={mae:.4f}  r={r_val:.3f}")
+    ax.set_xlabel(PL["xlabel_true"])
+    ax.set_ylabel(PL["ylabel_pred"])
+    ax.set_title(f"{dataset_label(key)}\nMAE={mae:.4f}  r={r_val:.3f}")
     ax.set_aspect("equal", adjustable="box")
     ax.scatter(
         [y_true[IDX_PRED]],
@@ -777,9 +819,10 @@ for col, key in enumerate(keys):
             linewidths=1.5,
         )
     ax.set_title(
-        f"{DATASETS[key]['label']}\n"
+        f"{dataset_label(key)}\n"
         f"{subject_id_plot}\n"
-        f"wahr={plot_true[key]:.4f}  präd={plot_pred[key]:.4f}",
+        f"{PL['true_abbr']}={plot_true[key]:.4f}  "
+        f"{PL['pred_abbr']}={plot_pred[key]:.4f}",
         fontsize=9,
     )
     ax.axis("off")
@@ -810,11 +853,12 @@ for col, key in enumerate(keys):
             linewidths=1.5,
         )
     ax.set_title(
-        f"LRP · {DATASETS[key]['label']}\n"
+        f"LRP · {dataset_label(key)}\n"
         f"{subject_id_plot}\n"
-        f"wahr={plot_true[key]:.4f}  präd={plot_pred[key]:.4f}  "
+        f"{PL['true_abbr']}={plot_true[key]:.4f}  "
+        f"{PL['pred_abbr']}={plot_pred[key]:.4f}  "
         f"|R|_max={abs_max:.3g}\n"
-        f"Thalamus = {pct_thal:.1f}% der Gesamtrelevanz",
+        f"{PL['thal_pct'].format(pct=pct_thal)}",
         fontsize=9,
     )
     print(
@@ -826,10 +870,10 @@ for col, key in enumerate(keys):
 
 for col, im in enumerate(im_vols):
     cbar = fig.colorbar(im, ax=axes[0, col], fraction=0.046, pad=0.04)
-    cbar.set_label("Intensität")
+    cbar.set_label(PL["cbar_intensity"])
 for col, im in enumerate(im_lrps):
     cbar = fig.colorbar(im, ax=axes[1, col], fraction=0.046, pad=0.04)
-    cbar.set_label("LRP-Relevanz")
+    cbar.set_label(PL["cbar_lrp"])
 
 fig.legend(
     handles=[
@@ -837,7 +881,7 @@ fig.legend(
             facecolor="none",
             edgecolor=COLOR_OUTLINE,
             linewidth=1.5,
-            label="rechter Thalamus",
+            label=PL["legend_right_thal"],
         )
     ],
     loc="lower center",
